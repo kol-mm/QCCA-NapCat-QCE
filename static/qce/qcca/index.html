@@ -61,11 +61,15 @@
           <div class="section-heading">
             <div>
               <h2 id="smtpTitle">邮件回复</h2>
-              <p>接收端 QQ 作为邮件发件人，用于回复消息发送者。</p>
+              <p>配置用于回复消息发送者的 QQ 邮箱账号。</p>
             </div>
             <span class="smtp-status" id="smtpStatus">正在读取</span>
           </div>
           <div class="smtp-grid">
+            <label class="field">
+              <span>发件 QQ 号</span>
+              <input id="smtpSenderQq" inputmode="numeric" autocomplete="off" placeholder="输入发件 QQ 号">
+            </label>
             <label class="field">
               <span>QQ 邮箱授权码</span>
               <input id="smtpAuthCode" type="password" autocomplete="new-password" placeholder="输入 16 位 QQ 邮箱授权码">

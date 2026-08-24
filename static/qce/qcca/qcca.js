@@ -4,7 +4,7 @@
   var apiPort = new URLSearchParams(location.search).get('apiPort') || '40655';
   if (!/^\d{1,5}$/.test(apiPort) || Number(apiPort) < 1 || Number(apiPort) > 65535) apiPort = '40655';
   var API_BASE = 'http://' + (location.hostname === 'localhost' ? 'localhost' : '127.0.0.1') + ':' + apiPort;
-  var state = { configs: {}, selectedUid: null, draft: null, dirty: false, smtpConfigured: false };
+  var state = { configs: {}, selectedUid: null, draft: null, dirty: false, smtpConfigured: false, smtpSenderQq: '' };
 
   var icons = {
     'arrow-left': '<path d="m12 19-7-7 7-7"/><path d="M19 12H5"/>',
@@ -75,6 +75,7 @@
       var responses = await Promise.all([request('/qcca/configs'), request('/qcca/smtp-config')]);
       state.configs = responses[0];
       state.smtpConfigured = Boolean(responses[1].configured);
+      state.smtpSenderQq = responses[1].sender_qq || '';
       setConnection(true, 'API 已连接');
       if (!keepSelection || !state.configs[state.selectedUid]) {
         state.selectedUid = Object.keys(state.configs).sort()[0] || null;
@@ -106,6 +107,7 @@
     var status = byId('smtpStatus');
     status.textContent = state.smtpConfigured ? '已配置' : '未配置';
     status.classList.toggle('configured', state.smtpConfigured);
+    byId('smtpSenderQq').value = state.smtpSenderQq;
     byId('smtpAuthCode').value = '';
   }
 
@@ -324,8 +326,14 @@
   }
 
   async function saveSmtpConfig() {
+    var senderQq = byId('smtpSenderQq').value.trim();
     var input = byId('smtpAuthCode');
     var authCode = input.value.trim();
+    if (!/^\d{5,12}$/.test(senderQq)) {
+      toast('请输入有效的发件 QQ 号', 'error');
+      byId('smtpSenderQq').focus();
+      return;
+    }
     if (!authCode) {
       toast('请输入 QQ 邮箱授权码', 'error');
       input.focus();
@@ -334,13 +342,14 @@
     var button = byId('saveSmtpButton');
     button.disabled = true;
     try {
-      await request('/qcca/smtp-config', {
+      var result = await request('/qcca/smtp-config', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ auth_code: authCode })
+        body: JSON.stringify({ sender_qq: senderQq, auth_code: authCode })
       });
       input.value = '';
       state.smtpConfigured = true;
+      state.smtpSenderQq = result.sender_qq || senderQq;
       renderSmtpSettings();
       toast('授权码已保存');
     } catch (error) {

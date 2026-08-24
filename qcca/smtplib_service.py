@@ -1,4 +1,3 @@
-import os
 import smtplib
 from email.mime.text import MIMEText
 from email.header import Header
@@ -11,9 +10,11 @@ def send_email(
     receiver: str,
     message: str,
 ):
+    smtp_config = config_service.get_smtp_config()
+    sender = smtp_config["sender_qq"] or sender
     mail_host = "smtp.qq.com"
     mail_user = f"{sender}@qq.com"
-    mail_pass = config_service.get_smtp_auth_code()
+    mail_pass = smtp_config["auth_code"]
     if not mail_pass:
         raise RuntimeError("未设置环境变量 QCCA_SMTP_AUTH_CODE")
 

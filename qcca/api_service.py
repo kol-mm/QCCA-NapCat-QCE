@@ -46,6 +46,7 @@ class User(BaseModel):
 
 
 class SmtpConfigUpdate(BaseModel):
+    sender_qq: str
     auth_code: str
 
 
@@ -114,19 +115,26 @@ def get_qcca_config(uid: int):
 @app.get("/qcca/smtp-config")
 def get_smtp_config():
     """仅返回配置状态，授权码绝不通过接口回传。"""
-    return {"configured": bool(config_service.get_smtp_auth_code())}
+    config = config_service.get_smtp_config()
+    return {
+        "configured": bool(config["sender_qq"] and config["auth_code"]),
+        "sender_qq": config["sender_qq"],
+    }
 
 
 @app.put("/qcca/smtp-config")
 def update_smtp_config(config: SmtpConfigUpdate):
+    sender_qq = config.sender_qq.strip()
     auth_code = config.auth_code.strip()
+    if not sender_qq.isdigit() or not 5 <= len(sender_qq) <= 12:
+        raise HTTPException(status_code=400, detail="发件 QQ 号格式无效")
     if not auth_code:
         raise HTTPException(status_code=400, detail="QQ 邮箱授权码不能为空")
     try:
-        config_service.save_smtp_auth_code(auth_code)
+        config_service.save_smtp_config(sender_qq, auth_code)
     except OSError as exc:
         raise HTTPException(status_code=500, detail=f"无法保存 SMTP 配置：{exc}") from exc
-    return {"configured": True}
+    return {"configured": True, "sender_qq": sender_qq}
 
 
 @app.put("/qcca/config/update/{uid}")

@@ -73,24 +73,36 @@ def smtp_config_file() -> str:
     return os.path.join(config_dir, "smtp.json")
 
 
-def get_smtp_auth_code() -> Optional[str]:
-    """优先读取管理页保存的授权码，兼容旧的环境变量配置。"""
+def get_smtp_config() -> dict[str, Optional[str]]:
+    """读取本机 SMTP 配置，兼容旧的环境变量授权码配置。"""
     try:
         with open(smtp_config_file(), "r", encoding="utf-8") as file:
-            value = json.load(file).get("auth_code")
-            if isinstance(value, str) and value.strip():
-                return value.strip()
+            data = json.load(file)
+            sender_qq = data.get("sender_qq")
+            auth_code = data.get("auth_code")
+            return {
+                "sender_qq": sender_qq.strip() if isinstance(sender_qq, str) and sender_qq.strip() else None,
+                "auth_code": auth_code.strip() if isinstance(auth_code, str) and auth_code.strip() else None,
+            }
     except (FileNotFoundError, json.JSONDecodeError, OSError, TypeError):
-        pass
-    return os.environ.get("QCCA_SMTP_AUTH_CODE")
+        return {"sender_qq": None, "auth_code": os.environ.get("QCCA_SMTP_AUTH_CODE")}
 
 
-def save_smtp_auth_code(auth_code: str) -> None:
-    """保存接收端 QQ 邮箱授权码，仅用于本机 SMTP 登录。"""
+def get_smtp_auth_code() -> Optional[str]:
+    return get_smtp_config()["auth_code"]
+
+
+def save_smtp_config(sender_qq: str, auth_code: str) -> None:
+    """保存 SMTP 发件 QQ 与授权码，仅用于本机邮件回复。"""
     path = smtp_config_file()
     temp_path = f"{path}.tmp"
     with open(temp_path, "w", encoding="utf-8") as file:
-        json.dump({"auth_code": auth_code.strip()}, file, ensure_ascii=False, indent=2)
+        json.dump(
+            {"sender_qq": sender_qq.strip(), "auth_code": auth_code.strip()},
+            file,
+            ensure_ascii=False,
+            indent=2,
+        )
         file.flush()
         os.fsync(file.fileno())
     os.replace(temp_path, path)

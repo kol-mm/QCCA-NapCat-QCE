@@ -96,8 +96,9 @@ QCCA 依赖:
 QCCA 配置文件位置:
   %USERPROFILE%\.qq-chat-exporter\qcca\workspace\config.json
 
-接收端 QQ 邮箱授权码:
-  在 QCCA 管理页面的“邮件回复”中配置。授权码仅保存在
+邮件回复发件 QQ 与邮箱授权码:
+  在 QCCA 管理页面的“邮件回复”中配置。QCCA 使用该 QQ 邮箱回复消息发送者。
+  授权码仅保存在
   %USERPROFILE%\.qq-chat-exporter\qcca\workspace\smtp.json，管理页面和 API 不会回显它。
   也兼容环境变量 QCCA_SMTP_AUTH_CODE。
 
