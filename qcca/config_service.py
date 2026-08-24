@@ -7,6 +7,7 @@ from threading import RLock
 from typing import Optional
 
 _smtp_lock = RLock()
+_user_config_lock = RLock()
 
 
 class SmtpConfigError(RuntimeError):
@@ -74,6 +75,26 @@ def config_dir_file():
         with open(config_file, 'w', encoding='utf-8') as f:
             json.dump({}, f, ensure_ascii=False, indent=2)
     return config_file
+
+
+def write_user_config(config_path: str, config: dict) -> None:
+    """原子保存用户、工作区和会话配置，避免中途写入损坏 JSON。"""
+    with _user_config_lock:
+        fd, temporary_path = tempfile.mkstemp(
+            prefix=".config.", suffix=".tmp", dir=os.path.dirname(config_path)
+        )
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as file:
+                json.dump(config, file, ensure_ascii=False, indent=2)
+                file.flush()
+                os.fsync(file.fileno())
+            os.replace(temporary_path, config_path)
+        except OSError:
+            try:
+                os.unlink(temporary_path)
+            except OSError:
+                pass
+            raise
 
 
 def smtp_config_file() -> str:
@@ -284,9 +305,7 @@ def add_user_data(config_dict,config_path,uid, workspace, session, resume, sandb
         # 内存更新最近会话
         config_dict[uid]["recent_workspace_and_session"].clear()
         config_dict[uid]["recent_workspace_and_session"][workspace] = session
-        # 一次性写磁盘
-        with open(config_path, 'w', encoding='utf-8') as f:
-            json.dump(config_dict, f, ensure_ascii=False, indent=2)
+        write_user_config(config_path, config_dict)
         return True
     except (KeyError, FileNotFoundError, json.JSONDecodeError, PermissionError, OSError) as e:
         print(f'出现错误{e}')
@@ -310,8 +329,7 @@ def set_user_recent_session(config_dict, config_path, uid, workspace, session):
     """将指定工作区和会话设为用户下次使用的分支。"""
     try:
         config_dict[uid]["recent_workspace_and_session"] = {workspace: session}
-        with open(config_path, 'w', encoding='utf-8') as f:
-            json.dump(config_dict, f, ensure_ascii=False, indent=2)
+        write_user_config(config_path, config_dict)
         return True
     except (KeyError, FileNotFoundError, PermissionError, OSError, TypeError) as e:
         print(f'更新最近分支失败: {e}')
@@ -332,8 +350,7 @@ def refresh_and_add_user_data(uid, workspace, session, resume, sandbox='read-onl
         try:
             config_dict[uid]["recent_workspace_and_session"].clear()
             config_dict[uid]["recent_workspace_and_session"][workspace] = session
-            with open(config_path, 'w', encoding='utf-8') as f:
-                json.dump(config_dict, f, ensure_ascii=False, indent=2)
+            write_user_config(config_path, config_dict)
             print('切换成功')
             return True
         except (KeyError, FileNotFoundError, PermissionError, OSError, TypeError) as e:

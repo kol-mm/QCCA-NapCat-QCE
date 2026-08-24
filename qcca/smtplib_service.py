@@ -29,7 +29,7 @@ def send_email(
     message['Subject'] = Header("agent回复消息", "utf-8").encode()
 
     try:
-        with smtplib.SMTP_SSL(mail_host, 465) as smtpObj:
+        with smtplib.SMTP_SSL(mail_host, 465, timeout=20) as smtpObj:
             smtpObj.login(mail_user, mail_pass)
             smtpObj.sendmail(sender_addr, receivers, message.as_string())
         print("邮件发送成功")

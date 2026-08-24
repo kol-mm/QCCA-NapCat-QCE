@@ -49,6 +49,6 @@ if ($LASTEXITCODE -ne 0) {
     }
 }
 
-Start-HiddenService @("qq_cloud_control_agent.py") $agentOut $agentErr
+Start-HiddenService @("-u", "qq_cloud_control_agent.py") $agentOut $agentErr
 if (-not $apiReady) { exit 1 }
 exit 0

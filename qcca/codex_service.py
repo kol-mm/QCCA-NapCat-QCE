@@ -6,6 +6,10 @@ import config_service as config
 import time
 import uuid
 from pathlib import Path
+
+VALID_SANDBOXES = {"read-only", "workspace-write", "danger-full-access"}
+
+
 def codex_control(
     context: str,
     workspace: str,
@@ -18,7 +22,7 @@ def codex_control(
     if not workspace:
         raise ValueError("workspace 不能为空")
 
-    sandbox = sandbox or "read-only"
+    sandbox = sandbox if sandbox in VALID_SANDBOXES else "read-only"
 
     if not Path(workspace).is_dir():
         raise ValueError(f"workspace 不存在或不是目录: {workspace}")
@@ -158,8 +162,7 @@ def codex_run(uid,context:str,workspace:Optional[str]=None,session:Optional[str]
                     codex_answer, resume = codex_control(context, recent_workspace, recent_resume,
                                                          user['workspaces'][recent_workspace]['sandbox'])
                     user['workspaces'][recent_workspace]['sessions'][session] = resume
-                    with open(config_path, 'w', encoding='utf-8') as f:
-                        json.dump(config_dict, f, ensure_ascii=False, indent=2)
+                    config.write_user_config(config_path, config_dict)
                     return f'工作空间:{recent_workspace},会话:{session}\n' + codex_answer.strip()
                 else:
                     if workspace in user['workspaces']:
@@ -226,7 +229,7 @@ def codex_run(uid,context:str,workspace:Optional[str]=None,session:Optional[str]
                 return f'创建新用户成功,工作空间:{workspace},会话:{session}\n' + codex_answer.strip()
             else:
                 return '创建新用户失败\n' + codex_answer.strip()
-    except (FileNotFoundError, PermissionError, OSError, KeyError, TypeError, json.JSONDecodeError) as e:
+    except (FileNotFoundError, PermissionError, OSError, KeyError, TypeError, json.JSONDecodeError, RuntimeError, TimeoutError, ValueError) as e:
         print(e)
         return f'出现错误{e}'
 

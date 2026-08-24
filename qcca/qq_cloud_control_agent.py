@@ -3,8 +3,8 @@ from time import sleep
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler, DirCreatedEvent, FileCreatedEvent
 import json
-import subprocess
-from funasr import AutoModel
+import io
+import threading
 import pysilk
 import wave
 import os
@@ -30,48 +30,56 @@ def check_login_api() -> bool:
         return False
 
 
-#构建qq用户字典对象
 def silk_to_wav(silk_path: str, wav_path: str) -> bool:
     try:
-        with open(silk_path, "rb") as f:
-            raw = f.read()
-        # 解码silk v3，输出pcm字节，采样率24000
-        pcm_bytes = pysilk.decode(raw, sample_rate=24000)
-
-        # 用python标准库wave写wav，不用pysilk自带不存在的write_wav
+        with open(silk_path, "rb") as source:
+            # pysilk 需要文件对象，不能直接传入字节数组。
+            output = io.BytesIO()
+            pysilk.decode(source, output, 24000)
         with wave.open(wav_path, "wb") as wf:
             wf.setnchannels(1)
             wf.setsampwidth(2)
             wf.setframerate(24000)
-            wf.writeframes(pcm_bytes)
+            wf.writeframes(output.getvalue())
         return True
     except Exception as e:
         print(f"pysilk解码异常：{e}")
         return False
-def amr_to_16k_wav(amr_file: str, wav_out: str) -> bool:
-    """amr转asr标准wav：16000采样率，单声道 pcm_s16le"""
-    cmd = [
-        "ffmpeg",
-        "-i", amr_file,
-        "-y",          #自动覆盖输出
-        "-acodec", "pcm_s16le",
-        "-ar", "16000",
-        "-ac", "1",    #单声道
-        wav_out
-    ]
-    ret = subprocess.run(cmd, capture_output=True, text=True)
-    if ret.returncode != 0:
-        print(f"转码失败：{ret.stderr}")
-        return False
-    return True
-config_service.update_audio_model_status('loading', '正在加载语音识别模型')
-try:
-    model = AutoModel(model="paraformer-zh", disable_update=True)
-except Exception as exc:
-    config_service.update_audio_model_status('failed', f'模型加载失败：{exc}')
-    raise
-config_service.update_audio_model_status('ready', '语音识别模型已就绪')
-print('模型加载成功', flush=True)
+
+
+audio_model = None
+audio_model_ready = threading.Event()
+
+
+def load_audio_model() -> None:
+    """后台加载大模型，避免文本命令被模型初始化阻塞。"""
+    global audio_model
+    config_service.update_audio_model_status('loading', '正在加载语音识别模型')
+    try:
+        from funasr import AutoModel
+        audio_model = AutoModel(model="paraformer-zh", disable_update=True)
+    except Exception as exc:
+        config_service.update_audio_model_status('failed', f'模型加载失败：{exc}')
+        print(f'模型加载失败：{exc}', flush=True)
+        return
+    audio_model_ready.set()
+    config_service.update_audio_model_status('ready', '语音识别模型已就绪')
+    print('模型加载成功', flush=True)
+
+
+def wait_for_audio_file(audio_path: str) -> bool:
+    """等待媒体文件写入完成，跳过空文件和尚未落盘的文件。"""
+    previous_size = -1
+    for _ in range(15):
+        try:
+            current_size = os.path.getsize(audio_path)
+        except OSError:
+            current_size = -1
+        if current_size > 0 and current_size == previous_size:
+            return True
+        previous_size = current_size
+        sleep(0.2)
+    return False
 class myFileSystemEventHandler(FileSystemEventHandler):
     def __init__(self):
         super().__init__()
@@ -121,39 +129,60 @@ class myFileSystemEventHandler(FileSystemEventHandler):
                                 data=json.loads(line)
                             except json.decoder.JSONDecodeError:
                                 continue
-                            #获取qq账号
-                            send_uid=data['message']['sender']['uin']
+                            message = data.get('message')
+                            if not isinstance(message, dict):
+                                print('消息缺少 message 字段，已跳过')
+                                continue
+                            sender = message.get('sender')
+                            content = message.get('content')
+                            if not isinstance(sender, dict) or not isinstance(content, dict):
+                                print('消息格式不完整，已跳过')
+                                continue
+                            send_uid = str(sender.get('uin') or '')
+                            elements = content.get('elements')
+                            if not send_uid or not isinstance(elements, list) or not elements:
+                                print('消息缺少发送者或内容元素，已跳过')
+                                continue
+                            first_element = elements[0] if isinstance(elements[0], dict) else {}
+                            message_type = first_element.get('type')
                             print(send_uid)
-                            #获取用户输入内容
-                            if(data['message']['content']['elements'][0]['type'] == 'text'):
-                                text = data['message']['content'].get('text')
+                            if message_type == 'text':
+                                text = content.get('text')
                                 if text:
-
-                                    data_list.append(text)
+                                    data_list.append(str(text))
                                     print(f'文件{event.src_path}读取成功')
-                            if(data['message']['content']['elements'][0]['type'] == 'audio'):
-                                print('文件格式为amr')
-                                sleep(1)
-                                audio_path = data['media'][0].get('localPath')
-                                if not audio_path:
-                                    print('音频路径为空')
-                                    continue
-                                wav_path = audio_path.replace('.amr', '.wav')
-                                if(silk_to_wav(audio_path, wav_path)):
-                                    print('amr转wav成功')
+                            elif message_type == 'audio':
+                                media = data.get('media')
+                                audio_path = (
+                                    media[0].get('localPath')
+                                    if isinstance(media, list) and media and isinstance(media[0], dict)
+                                    else None
+                                )
+                                if not isinstance(audio_path, str) or not wait_for_audio_file(audio_path):
+                                    send_email(receive_uid, send_uid, '语音文件尚未准备完成，请稍后重发。')
+                                    return
+                                if not audio_model_ready.wait(timeout=120):
+                                    send_email(receive_uid, send_uid, '语音识别模型仍在加载，请稍后重发。')
+                                    return
+                                wav_path = os.path.splitext(audio_path)[0] + '.wav'
+                                try:
+                                    if not silk_to_wav(audio_path, wav_path):
+                                        send_email(receive_uid, send_uid, '语音解码失败，暂时无法识别该语音。')
+                                        return
+                                    text_list = audio_model.generate(input=wav_path)
+                                    text = text_list[0].get('text') if text_list and isinstance(text_list[0], dict) else ''
+                                    data_list.append(text or '未识别到内容')
+                                    print(f'识别内容为:{text}')
+                                except Exception as e:
+                                    print(f'文件{event.src_path}语音识别失败:{e}')
+                                    send_email(receive_uid, send_uid, '语音识别失败，请稍后重试。')
+                                    return
+                                finally:
                                     try:
-                                        text_list=model.generate(wav_path)
-                                        text = text_list[0]['text'] if text_list[0]['text'] != '' and text_list[0]['text'] != None else '未识别到内容'
-                                        data_list.append(text)
-                                        print(f'识别内容为:{text}')
-                                    except Exception as e:
-                                        print(f'文件{event.src_path}读取失败:{e}')
-                                    finally:
-                                        try:
-                                            if os.path.exists(wav_path):
-                                                os.remove(wav_path)
-                                        except OSError as e:
-                                            print(f'清理临时语音文件失败: {e}')
+                                        if os.path.exists(wav_path):
+                                            os.remove(wav_path)
+                                    except OSError as e:
+                                        print(f'清理临时语音文件失败: {e}')
                         parse_sandbox_params_dict=config_service.parse_sandbox_params(''.join(data_list))
                         combined_text = ''.join(data_list)
                         command = combined_text.strip().lower()
@@ -246,6 +275,7 @@ class myFileSystemEventHandler(FileSystemEventHandler):
 if __name__ == '__main__':
     print('程序开始', flush=True)
     check_login_api()
+    threading.Thread(target=load_audio_model, name='qcca-audio-model', daemon=True).start()
     #创建系统目录
     work_path=os.path.expanduser(r'~\.qq-chat-exporter\qcca')
     os.makedirs(work_path,exist_ok=True)
@@ -254,9 +284,7 @@ if __name__ == '__main__':
     with open(work_path+r'\workspace\config.json','a',encoding='utf-8') as f:
         pass
     myhandler=myFileSystemEventHandler()
-    observer = Observer()
     print('开始监听文件夹', flush=True)
-
     observer = Observer()
     watch_dir = os.path.abspath(os.path.expandvars(
         os.getenv('QCCA_WATCH_DIR', DEFAULT_WATCH_DIR)
@@ -267,14 +295,13 @@ if __name__ == '__main__':
     print("开始监听文件夹，按 Ctrl+C 退出", flush=True)
     observer.start()  # 后台线程开始监听
 
-        # 主线程循环，保持程序不退出
     try:
         heartbeat_at = 0.0
         while True:
-                time.sleep(1)
-                if time.monotonic() - heartbeat_at >= 5:
-                    config_service.update_audio_model_status('ready', '语音识别模型已就绪')
-                    heartbeat_at = time.monotonic()
+            time.sleep(1)
+            if audio_model_ready.is_set() and time.monotonic() - heartbeat_at >= 5:
+                config_service.update_audio_model_status('ready', '语音识别模型已就绪')
+                heartbeat_at = time.monotonic()
     except KeyboardInterrupt:
         # 按下ctrl+c触发
         print("\n准备停止监听")
