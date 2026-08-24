@@ -7,6 +7,10 @@ from typing import Optional
 _smtp_lock = RLock()
 
 
+class SmtpConfigError(RuntimeError):
+    """SMTP 配置无法安全读取时抛出，防止后续写入覆盖原文件。"""
+
+
 def parse_sandbox_params(text: str) -> dict[str, str | None]:
     result = {"workspace": None, "sandbox": None, "session": None}
 
@@ -113,8 +117,14 @@ def get_smtp_config() -> dict:
     try:
         with _smtp_lock, open(smtp_config_file(), "r", encoding="utf-8") as file:
             data = json.load(file)
-    except (FileNotFoundError, json.JSONDecodeError, OSError, TypeError):
+    except FileNotFoundError:
         return {"accounts": {}, "selected_sender_qq": None}
+    except json.JSONDecodeError as exc:
+        raise SmtpConfigError("SMTP 配置文件格式无效，请修复或移走 smtp.json 后重试") from exc
+    except OSError as exc:
+        raise SmtpConfigError(f"无法读取 SMTP 配置文件：{exc}") from exc
+    if not isinstance(data, dict):
+        raise SmtpConfigError("SMTP 配置文件根节点必须是 JSON 对象")
     return _normalize_smtp_config(data)
 
 

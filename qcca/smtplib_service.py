@@ -33,5 +33,5 @@ def send_email(
             smtpObj.login(mail_user, mail_pass)
             smtpObj.sendmail(sender_addr, receivers, message.as_string())
         print("邮件发送成功")
-    except smtplib.SMTPException as e:
-        print(f"Error: 无法发送邮件,详情:{e}")
+    except (smtplib.SMTPException, OSError) as exc:
+        raise RuntimeError(f"SMTP 邮件发送失败：{exc}") from exc

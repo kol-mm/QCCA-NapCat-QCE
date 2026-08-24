@@ -117,8 +117,8 @@ def _smtp_response() -> dict:
             config_service.ensure_smtp_account(login_qq)
             if login_qq else config_service.get_smtp_config()
         )
-    except OSError as exc:
-        raise HTTPException(status_code=500, detail=f"无法保存 SMTP 配置：{exc}") from exc
+    except (OSError, config_service.SmtpConfigError) as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
     accounts = config.get("accounts", {})
     ordered_qqs = sorted(accounts, key=lambda qq: (qq != login_qq, qq))
     selected = config.get("selected_sender_qq")
@@ -163,24 +163,33 @@ def update_smtp_config(config: SmtpConfigUpdate):
         raise HTTPException(status_code=400, detail="QQ 邮箱授权码不能为空")
     try:
         config_service.save_smtp_config(sender_qq, auth_code)
-    except OSError as exc:
-        raise HTTPException(status_code=500, detail=f"无法保存 SMTP 配置：{exc}") from exc
+    except (OSError, config_service.SmtpConfigError) as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
     return _smtp_response()
 
 
 @app.put("/qcca/smtp-config/select/{sender_qq}")
 def select_smtp_config(sender_qq: str):
-    if not config_service.select_smtp_account(sender_qq):
-        raise HTTPException(status_code=404, detail="发件 QQ 配置不存在")
+    try:
+        if not config_service.select_smtp_account(sender_qq):
+            raise HTTPException(status_code=404, detail="发件 QQ 配置不存在")
+    except (OSError, config_service.SmtpConfigError) as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
     return _smtp_response()
 
 
 @app.delete("/qcca/smtp-config/{sender_qq}")
 def delete_smtp_config(sender_qq: str):
-    if sender_qq == _get_current_login_qq():
+    login_qq = _get_current_login_qq()
+    if login_qq is None:
+        raise HTTPException(status_code=503, detail="NapCat 登录接口不可用，暂时禁止删除发件 QQ 配置")
+    if sender_qq == login_qq:
         raise HTTPException(status_code=400, detail="当前登录 QQ 的预留配置不能删除")
-    if not config_service.delete_smtp_account(sender_qq):
-        raise HTTPException(status_code=404, detail="发件 QQ 配置不存在")
+    try:
+        if not config_service.delete_smtp_account(sender_qq):
+            raise HTTPException(status_code=404, detail="发件 QQ 配置不存在")
+    except (OSError, config_service.SmtpConfigError) as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
     return _smtp_response()
 
 

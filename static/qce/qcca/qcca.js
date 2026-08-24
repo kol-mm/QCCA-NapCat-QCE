@@ -434,5 +434,6 @@
   window.addEventListener('beforeunload', function (event) { if (state.dirty) { event.preventDefault(); event.returnValue = ''; } });
 
   renderIcons();
+  byId('apiAddress').textContent = 'API · ' + API_BASE.replace(/^https?:\/\//, '');
   loadConfigs(false);
 })();

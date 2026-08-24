@@ -38,7 +38,7 @@ JSONL 文件，自动处理文本和语音消息:
   - 处理结果通过 QQ 邮箱 SMTP 回复对应用户
 
 QCCA 依赖:
-  - Python 3.8+
+  - Python 3.10+
   - watchdog, funasr, pysilk, torch, torchaudio
   - fastapi, uvicorn
   - ffmpeg (用于 amr 转 wav)
@@ -114,7 +114,7 @@ QCCA 监听目录默认位置:
 --------------------------------------------------
 - 已安装的 QQNT (启动时会自动同步本机 QQNT 版本信息)
   下载地址: https://im.qq.com/
-- Python 3.8+ (QCCA 模块需要)
+- Python 3.10+ (QCCA 模块需要)
   下载地址: https://www.python.org/
 - ffmpeg (QCCA 语音识别需要，用于 amr 转 wav)
   下载地址: https://ffmpeg.org/
