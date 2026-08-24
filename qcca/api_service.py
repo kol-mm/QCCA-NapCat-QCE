@@ -45,6 +45,10 @@ class User(BaseModel):
     recent_workspace_and_session: Dict[str, str]
 
 
+class SmtpConfigUpdate(BaseModel):
+    auth_code: str
+
+
 def _config_path() -> Path:
     return Path(config_service.config_dir_file())
 
@@ -105,6 +109,24 @@ def get_qcca_config(uid: int):
     if user is None:
         raise HTTPException(status_code=404, detail="QQ 用户配置不存在")
     return user
+
+
+@app.get("/qcca/smtp-config")
+def get_smtp_config():
+    """仅返回配置状态，授权码绝不通过接口回传。"""
+    return {"configured": bool(config_service.get_smtp_auth_code())}
+
+
+@app.put("/qcca/smtp-config")
+def update_smtp_config(config: SmtpConfigUpdate):
+    auth_code = config.auth_code.strip()
+    if not auth_code:
+        raise HTTPException(status_code=400, detail="QQ 邮箱授权码不能为空")
+    try:
+        config_service.save_smtp_auth_code(auth_code)
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"无法保存 SMTP 配置：{exc}") from exc
+    return {"configured": True}
 
 
 @app.put("/qcca/config/update/{uid}")

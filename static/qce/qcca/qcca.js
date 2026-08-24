@@ -4,7 +4,7 @@
   var apiPort = new URLSearchParams(location.search).get('apiPort') || '40655';
   if (!/^\d{1,5}$/.test(apiPort) || Number(apiPort) < 1 || Number(apiPort) > 65535) apiPort = '40655';
   var API_BASE = 'http://' + (location.hostname === 'localhost' ? 'localhost' : '127.0.0.1') + ':' + apiPort;
-  var state = { configs: {}, selectedUid: null, draft: null, dirty: false };
+  var state = { configs: {}, selectedUid: null, draft: null, dirty: false, smtpConfigured: false };
 
   var icons = {
     'arrow-left': '<path d="m12 19-7-7 7-7"/><path d="M19 12H5"/>',
@@ -72,7 +72,9 @@
   async function loadConfigs(keepSelection) {
     setConnection(false, '正在连接');
     try {
-      state.configs = await request('/qcca/configs');
+      var responses = await Promise.all([request('/qcca/configs'), request('/qcca/smtp-config')]);
+      state.configs = responses[0];
+      state.smtpConfigured = Boolean(responses[1].configured);
       setConnection(true, 'API 已连接');
       if (!keepSelection || !state.configs[state.selectedUid]) {
         state.selectedUid = Object.keys(state.configs).sort()[0] || null;
@@ -89,6 +91,7 @@
 
   function render() {
     renderSidebar();
+    renderSmtpSettings();
     var hasUser = Boolean(state.selectedUid && state.draft);
     byId('emptyState').hidden = hasUser;
     byId('editor').hidden = !hasUser;
@@ -97,6 +100,13 @@
     if (!hasUser) return;
     byId('userTitle').textContent = state.selectedUid;
     renderEditor();
+  }
+
+  function renderSmtpSettings() {
+    var status = byId('smtpStatus');
+    status.textContent = state.smtpConfigured ? '已配置' : '未配置';
+    status.classList.toggle('configured', state.smtpConfigured);
+    byId('smtpAuthCode').value = '';
   }
 
   function renderSidebar() {
@@ -313,6 +323,33 @@
     }
   }
 
+  async function saveSmtpConfig() {
+    var input = byId('smtpAuthCode');
+    var authCode = input.value.trim();
+    if (!authCode) {
+      toast('请输入 QQ 邮箱授权码', 'error');
+      input.focus();
+      return;
+    }
+    var button = byId('saveSmtpButton');
+    button.disabled = true;
+    try {
+      await request('/qcca/smtp-config', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ auth_code: authCode })
+      });
+      input.value = '';
+      state.smtpConfigured = true;
+      renderSmtpSettings();
+      toast('授权码已保存');
+    } catch (error) {
+      toast(error.message, 'error');
+    } finally {
+      button.disabled = false;
+    }
+  }
+
   function closeDeleteModal() { byId('deleteModal').hidden = true; }
 
   async function deleteUser() {
@@ -334,6 +371,7 @@
   byId('deleteUserButton').addEventListener('click', function () { byId('deleteModal').hidden = false; });
   byId('confirmDeleteUser').addEventListener('click', deleteUser);
   byId('saveButton').addEventListener('click', saveUser);
+  byId('saveSmtpButton').addEventListener('click', saveSmtpConfig);
   byId('recentWorkspace').addEventListener('change', function () {
     state.draft.recent_workspace_and_session = {};
     renderRecentSelectors(byId('recentWorkspace').value);

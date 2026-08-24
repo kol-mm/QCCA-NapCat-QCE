@@ -17,6 +17,7 @@ build/
 # QCCA 工作区数据（用户本地生成）
 .qcca/
 qcca/workspace/
+qcca/**/smtp.json
 qcca/*.wav
 qcca/*.amr
 qcca/*.silk

@@ -65,6 +65,35 @@ def config_dir_file():
         with open(config_file, 'w', encoding='utf-8') as f:
             json.dump({}, f, ensure_ascii=False, indent=2)
     return config_file
+
+
+def smtp_config_file() -> str:
+    """返回接收端 QQ 邮箱 SMTP 配置文件的本机路径。"""
+    config_dir = os.path.dirname(config_dir_file())
+    return os.path.join(config_dir, "smtp.json")
+
+
+def get_smtp_auth_code() -> Optional[str]:
+    """优先读取管理页保存的授权码，兼容旧的环境变量配置。"""
+    try:
+        with open(smtp_config_file(), "r", encoding="utf-8") as file:
+            value = json.load(file).get("auth_code")
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    except (FileNotFoundError, json.JSONDecodeError, OSError, TypeError):
+        pass
+    return os.environ.get("QCCA_SMTP_AUTH_CODE")
+
+
+def save_smtp_auth_code(auth_code: str) -> None:
+    """保存接收端 QQ 邮箱授权码，仅用于本机 SMTP 登录。"""
+    path = smtp_config_file()
+    temp_path = f"{path}.tmp"
+    with open(temp_path, "w", encoding="utf-8") as file:
+        json.dump({"auth_code": auth_code.strip()}, file, ensure_ascii=False, indent=2)
+        file.flush()
+        os.fsync(file.fileno())
+    os.replace(temp_path, path)
 def dict_user_exist(uid):
     try:
         with open(config_dir_file(), 'r', encoding='utf-8') as f:

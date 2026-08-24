@@ -57,6 +57,25 @@
       </div>
 
       <section class="content" id="content">
+        <section class="smtp-settings" aria-labelledby="smtpTitle">
+          <div class="section-heading">
+            <div>
+              <h2 id="smtpTitle">邮件回复</h2>
+              <p>接收端 QQ 作为邮件发件人，用于回复消息发送者。</p>
+            </div>
+            <span class="smtp-status" id="smtpStatus">正在读取</span>
+          </div>
+          <div class="smtp-grid">
+            <label class="field">
+              <span>QQ 邮箱授权码</span>
+              <input id="smtpAuthCode" type="password" autocomplete="new-password" placeholder="输入 16 位 QQ 邮箱授权码">
+            </label>
+            <button class="button primary" id="saveSmtpButton" type="button">
+              <span data-icon="save"></span><span>保存授权码</span>
+            </button>
+          </div>
+        </section>
+
         <div class="empty-state" id="emptyState">
           <span class="empty-icon" data-icon="settings-2"></span>
           <h1>尚未选择 QQ 用户</h1>
