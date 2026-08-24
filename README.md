@@ -1,8 +1,18 @@
 # QCCA-NapCat-QCE
 
-基于 [NapCatQQ](https://github.com/NapNeko/NapCatQQ) 与 [QQ Chat Exporter](https://github.com/shuakami/qq-chat-exporter) 的 Windows x64 整合项目，增加了 QCCA（QQ Cloud Control Agent）消息处理与本地管理页面。
+> 基于 NapCatQQ 与 QQ Chat Exporter 的 Windows x64 整合项目，提供聊天记录导出、QCCA 消息处理和本地管理页面。
 
-## 组件
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
+[![Platform: Windows x64](https://img.shields.io/badge/Platform-Windows%20x64-0078D4.svg)](#系统要求)
+[![Python: 3.10+](https://img.shields.io/badge/Python-3.10%2B-3776AB.svg)](#系统要求)
+
+**语言 / Language:** [中文](README.md) | [English](README.en.md)
+
+---
+
+## 简介
+
+QCCA-NapCat-QCE 将以下组件整合为一个 Windows 使用包：
 
 | 组件 | 版本 / 用途 |
 | --- | --- |
@@ -10,6 +20,15 @@
 | QQ Chat Exporter | v5.5.80，导出并浏览 QQ 聊天记录 |
 | QCCA | 处理 live-capture 消息、调用 Codex，并通过 QQ 邮箱回复 |
 | QCCA API | 基于 FastAPI 的本地管理服务 |
+
+## 功能
+
+- 导出与浏览 QQ 聊天记录。
+- 监听 QQ Chat Exporter 的 `live-capture` JSONL 消息。
+- 将文本消息交给 Codex Agent 处理。
+- 将语音消息通过 FunASR 转写后处理。
+- 使用 QQ 邮箱 SMTP 向消息发送者回复。
+- 通过本地网页管理 QCCA 的工作区沙箱权限和发件账号。
 
 ## 开始使用
 
@@ -25,7 +44,7 @@
 
 运行 `start-standalone.bat` 可浏览已经导出的聊天记录，不需要登录 QQ，也不会启动 QCCA。
 
-## QCCA
+## QCCA 管理
 
 QCCA 会监听 QQ Chat Exporter 的 `live-capture` JSONL 文件：
 
