@@ -118,13 +118,6 @@ def get_smtp_config() -> dict:
     return _normalize_smtp_config(data)
 
 
-def get_smtp_auth_code() -> Optional[str]:
-    selected = get_smtp_config().get("selected_sender_qq")
-    if selected:
-        return get_smtp_config()["accounts"].get(selected, {}).get("auth_code") or None
-    return os.environ.get("QCCA_SMTP_AUTH_CODE")
-
-
 def save_smtp_config(sender_qq: str, auth_code: str) -> None:
     """新增或更新 SMTP 发件 QQ，并将其设为当前发件账号。"""
     with _smtp_lock:

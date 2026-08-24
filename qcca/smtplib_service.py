@@ -15,13 +15,8 @@ def send_email(
     mail_host = "smtp.qq.com"
     mail_user = f"{sender}@qq.com"
     mail_pass = smtp_config.get("accounts", {}).get(sender, {}).get("auth_code")
-    if not mail_pass and (
-        sender == smtp_config.get("selected_sender_qq")
-        or not smtp_config.get("selected_sender_qq")
-    ):
-        mail_pass = config_service.get_smtp_auth_code()
     if not mail_pass:
-        raise RuntimeError("未设置环境变量 QCCA_SMTP_AUTH_CODE")
+        raise RuntimeError(f"发件 QQ {sender} 尚未配置邮箱授权码")
 
     sender_addr =f"{sender}@qq.com"
     receivers = [f"{receiver}@qq.com"]

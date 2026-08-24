@@ -102,7 +102,6 @@ QCCA 配置文件位置:
   QCCA 使用当前选中的 QQ 邮箱回复消息发送者。
   授权码以明文 JSON 保存在
   %USERPROFILE%\.qq-chat-exporter\qcca\workspace\smtp.json，请妥善保护该文件；管理页面和 API 不会回显它。
-  也兼容环境变量 QCCA_SMTP_AUTH_CODE。
 
 管理页面不会直接创建 QQ 用户。QQ 用户、工作区和会话由 QCCA 在处理消息时自动写入配置文件。
 
