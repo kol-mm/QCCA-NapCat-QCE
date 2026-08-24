@@ -1,0 +1,34 @@
+{
+  "name": "napcat-plugin-qce",
+  "plugin": "QQ 聊天记录导出",
+  "version": "5.5.80",
+  "description": "导出 QQ 聊天记录为 HTML / JSON / TXT / Excel，支持时间筛选、批量任务、定时任务、表情图片语音视频资源处理、合并转发展开等。",
+  "main": "index.mjs",
+  "type": "module",
+  "icon": "icon.png",
+  "homepage": "https://github.com/shuakami/qq-chat-exporter",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/shuakami/qq-chat-exporter.git"
+  },
+  "napcat": {
+    "tags": [
+      "工具"
+    ],
+    "minVersion": "4.14.0",
+    "homepage": "https://github.com/shuakami/qq-chat-exporter"
+  },
+  "keywords": [
+    "napcat",
+    "plugin",
+    "qq",
+    "chat",
+    "exporter",
+    "onebot"
+  ],
+  "author": "shuakami",
+  "dependencies": {},
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

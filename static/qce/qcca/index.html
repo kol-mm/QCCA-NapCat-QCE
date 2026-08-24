@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>QCCA 管理 - QQ Chat Exporter</title>
+  <link rel="icon" href="/static/qce/favicon.ico">
+  <link rel="stylesheet" href="/static/qce/qcca/qcca.css">
+  <script>
+    try {
+      var theme = localStorage.getItem('theme');
+      if (theme === 'dark' || (!theme && matchMedia('(prefers-color-scheme: dark)').matches)) {
+        document.documentElement.classList.add('dark');
+      }
+    } catch (error) {}
+  </script>
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand-row">
+        <a class="icon-button" href="/qce" aria-label="返回 QQ Chat Exporter" title="返回 QQ Chat Exporter" data-icon="arrow-left"></a>
+        <div>
+          <div class="brand-title">QCCA</div>
+          <div class="brand-subtitle">配置管理</div>
+        </div>
+      </div>
+
+      <div class="connection-row">
+        <span class="status-dot" id="connectionDot"></span>
+        <span id="connectionText">正在连接</span>
+        <button class="icon-button compact" id="refreshButton" type="button" aria-label="刷新配置" title="刷新配置" data-icon="refresh-cw"></button>
+      </div>
+
+      <label class="search-box">
+        <span class="search-icon" data-icon="search"></span>
+        <input id="userSearch" type="search" placeholder="搜索 QQ 号" autocomplete="off">
+      </label>
+
+      <div class="sidebar-heading"><span>QQ 用户</span></div>
+      <nav class="user-list" id="userList" aria-label="QQ 用户列表"></nav>
+      <div class="sidebar-footer">API · 127.0.0.1:40655</div>
+    </aside>
+
+    <main class="main-content">
+      <div class="topbar">
+        <div class="breadcrumbs"><span>QCE</span><span>/</span><strong>QCCA 管理</strong></div>
+        <div class="topbar-actions">
+          <button class="button danger ghost" id="deleteUserButton" type="button" hidden>
+            <span data-icon="trash-2"></span><span>删除用户</span>
+          </button>
+          <button class="button primary" id="saveButton" type="button" hidden disabled>
+            <span data-icon="save"></span><span>保存配置</span>
+          </button>
+        </div>
+      </div>
+
+      <section class="content" id="content">
+        <div class="empty-state" id="emptyState">
+          <span class="empty-icon" data-icon="settings-2"></span>
+          <h1>尚未选择 QQ 用户</h1>
+        </div>
+
+        <div id="editor" hidden>
+          <header class="editor-header">
+            <div>
+              <div class="eyebrow">QQ 用户</div>
+              <h1 id="userTitle"></h1>
+            </div>
+            <div class="summary" aria-label="配置统计">
+              <div><strong id="workspaceCount">0</strong><span>工作区</span></div>
+              <div><strong id="sessionCount">0</strong><span>会话</span></div>
+            </div>
+          </header>
+
+          <section class="settings-band">
+            <div class="section-heading">
+              <div>
+                <h2>最近分支</h2>
+              </div>
+            </div>
+            <div class="recent-grid">
+              <label class="field"><span>工作区</span><select id="recentWorkspace"></select></label>
+              <label class="field"><span>会话</span><select id="recentSession"></select></label>
+            </div>
+          </section>
+
+          <section class="workspace-section">
+            <div class="section-heading">
+              <div>
+                <h2>工作区与会话</h2>
+              </div>
+            </div>
+            <div class="workspace-list" id="workspaceList"></div>
+          </section>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div class="toast-region" id="toastRegion" aria-live="polite"></div>
+
+  <div class="modal-backdrop" id="deleteModal" hidden>
+    <div class="modal" role="alertdialog" aria-modal="true" aria-labelledby="deleteModalTitle">
+      <div class="modal-header">
+        <h2 id="deleteModalTitle">删除 QQ 用户</h2>
+        <button class="icon-button" type="button" data-close-delete aria-label="关闭" title="关闭" data-icon="x"></button>
+      </div>
+      <p class="modal-copy">将删除该 QQ 用户保存的所有工作区和会话配置。此操作无法撤销。</p>
+      <div class="modal-actions">
+        <button class="button secondary" type="button" data-close-delete>取消</button>
+        <button class="button danger" id="confirmDeleteUser" type="button">确认删除</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/qce/qcca/qcca.js"></script>
+</body>
+</html>

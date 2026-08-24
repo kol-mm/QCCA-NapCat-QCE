@@ -1,0 +1,124 @@
+# ============================================================
+# QCCA-NapCat-QCE .gitignore
+# ============================================================
+
+# -------------------- QCCA --------------------
+# Python 虚拟环境
+qcca/venv/
+# Python 字节码
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.egg-info/
+*.egg
+dist/
+build/
+# QCCA 工作区数据（用户本地生成）
+.qcca/
+qcca/workspace/
+qcca/*.wav
+qcca/*.amr
+qcca/*.silk
+qcca/*.pt
+qcca/*.pth
+
+# QQ Chat Exporter / NapCat 用户运行数据
+config/webui.json
+config/qq_path.txt
+config/napcat_*.json
+config/napcat_protocol_*.json
+config/onebot11_*.json
+config/*-user.json
+security.json
+user-config.json
+live-capture/
+
+# -------------------- 日志 --------------------
+logs/
+*.log
+
+# -------------------- 缓存 --------------------
+cache/
+
+# -------------------- 配置文件（含用户隐私数据）--------------------
+config/qq_path.txt
+config/napcat_*.json
+config/onebot11_*.json
+config/webui.json
+
+# -------------------- 数据库 --------------------
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# -------------------- Node.js --------------------
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# -------------------- 生成文件 --------------------
+loadNapCat.js
+
+# -------------------- 备份与临时文件 --------------------
+*.bak
+*.tmp
+*.swp
+*~
+*.orig
+
+# -------------------- 操作系统 --------------------
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+desktop.ini
+$RECYCLE.BIN/
+*.lnk
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+# Linux
+*~
+
+# -------------------- IDE / 编辑器 --------------------
+.vscode/
+.idea/
+*.code-workspace
+.project
+.classpath
+.settings/
+*.sublime-workspace
+*.sublime-project
+
+# -------------------- 环境变量 --------------------
+.env
+.env.local
+.env.*.local
+
+# -------------------- 模型文件（FunASR / Torch 大文件）--------------------
+*.pt
+*.pth
+*.onnx
+*.bin
+model/
+models/
+
+# 发布包备份文件
+*.exe.bak
+
+# -------------------- Windows 运行包二进制 --------------------
+# 源码仓库不提交打包后的可执行文件或本地原生模块；
+# 使用者按 README 安装依赖或从 Release 下载运行包。
+*.exe
+*.dll
+*.lib
+*.node
+native/
