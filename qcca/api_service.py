@@ -40,6 +40,12 @@ def health_check():
     """用于启动器和管理页面确认 API 已经完成启动。"""
     return {"status": "ok", "service": "qcca-api"}
 
+
+@app.get("/qcca/audio-model-status")
+def get_audio_model_status():
+    """返回独立 Agent 上报的语音识别模型状态。"""
+    return config_service.get_audio_model_status()
+
 _config_lock = RLock()
 
 

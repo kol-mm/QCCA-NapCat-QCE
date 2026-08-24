@@ -131,6 +131,13 @@ button { color: inherit; }
 .breadcrumbs strong { color: var(--text); }
 .topbar-actions { display: flex; gap: 8px; }
 .content { width: min(1040px, 100%); margin: 0 auto; padding: 38px 34px 64px; }
+.audio-model-settings { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 16px; padding: 18px 22px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; }
+.audio-model-settings h2 { margin: 0; font-size: 15px; }
+.audio-model-settings p { margin: 5px 0 0; color: var(--muted); font-size: 12px; }
+.model-status { flex: 0 0 auto; padding: 4px 8px; color: var(--muted); background: var(--surface-alt); border: 1px solid var(--border); border-radius: 999px; font-size: 12px; white-space: nowrap; }
+.model-status.ready { color: var(--green); }
+.model-status.loading { color: var(--blue); }
+.model-status.failed, .model-status.stopped { color: var(--red); }
 .smtp-settings { margin-bottom: 32px; padding: 22px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; }
 .smtp-settings .section-heading { margin-bottom: 16px; }
 .smtp-status { padding: 4px 8px; color: var(--muted); background: var(--surface-alt); border: 1px solid var(--border); border-radius: 999px; font-size: 12px; white-space: nowrap; }
@@ -233,6 +240,7 @@ svg.lucide { display: block; fill: none; stroke: currentColor; stroke-width: 2; 
   .recent-grid { grid-template-columns: 1fr; }
   .smtp-grid { grid-template-columns: 1fr; }
   .smtp-grid .button { width: 100%; }
+  .audio-model-settings { align-items: flex-start; }
   .workspace-header { grid-template-columns: 1fr; }
   .workspace-header > .icon-button { justify-self: end; }
   .session-row { grid-template-columns: 1fr; }

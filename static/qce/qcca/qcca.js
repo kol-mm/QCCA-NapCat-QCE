@@ -4,7 +4,7 @@
   var apiPort = new URLSearchParams(location.search).get('apiPort') || '40655';
   if (!/^\d{1,5}$/.test(apiPort) || Number(apiPort) < 1 || Number(apiPort) > 65535) apiPort = '40655';
   var API_BASE = 'http://' + (location.hostname === 'localhost' ? 'localhost' : '127.0.0.1') + ':' + apiPort;
-  var state = { configs: {}, selectedUid: null, draft: null, dirty: false, smtpConfigured: false, smtpSenderQq: '', smtpAccounts: [], smtpLoginQq: '' };
+  var state = { configs: {}, selectedUid: null, draft: null, dirty: false, smtpConfigured: false, smtpSenderQq: '', smtpAccounts: [], smtpLoginQq: '', audioModel: { status: 'unknown', message: '' } };
 
   var icons = {
     'arrow-left': '<path d="m12 19-7-7 7-7"/><path d="M19 12H5"/>',
@@ -72,9 +72,10 @@
   async function loadConfigs(keepSelection) {
     setConnection(false, '正在连接');
     try {
-      var responses = await Promise.all([request('/qcca/configs'), request('/qcca/smtp-config')]);
+      var responses = await Promise.all([request('/qcca/configs'), request('/qcca/smtp-config'), request('/qcca/audio-model-status')]);
       state.configs = responses[0];
       applySmtpResult(responses[1]);
+      state.audioModel = responses[2];
       setConnection(true, 'API 已连接');
       if (!keepSelection || !state.configs[state.selectedUid]) {
         state.selectedUid = Object.keys(state.configs).sort()[0] || null;
@@ -91,6 +92,7 @@
 
   function render() {
     renderSidebar();
+    renderAudioModelStatus();
     renderSmtpSettings();
     var hasUser = Boolean(state.selectedUid && state.draft);
     byId('emptyState').hidden = hasUser;
@@ -117,6 +119,32 @@
     byId('deleteSmtpButton').hidden = !selected || selected === state.smtpLoginQq;
     byId('smtpNewSenderQq').value = '';
     byId('smtpAuthCode').value = '';
+  }
+
+  function renderAudioModelStatus() {
+    var status = byId('audioModelStatus');
+    var current = state.audioModel || {};
+    var labels = {
+      not_started: 'Agent 未启动',
+      loading: '模型加载中',
+      ready: '模型已就绪',
+      failed: '加载失败',
+      stopped: 'Agent 已停止',
+      unknown: '状态未知'
+    };
+    var value = current.status || 'unknown';
+    status.textContent = labels[value] || '状态未知';
+    status.className = 'model-status ' + value;
+    status.title = current.message || status.textContent;
+  }
+
+  async function loadAudioModelStatus() {
+    try {
+      state.audioModel = await request('/qcca/audio-model-status');
+    } catch (error) {
+      state.audioModel = { status: 'unknown', message: '无法连接 QCCA API' };
+    }
+    renderAudioModelStatus();
   }
 
   function applySmtpResult(result) {
@@ -436,4 +464,5 @@
   renderIcons();
   byId('apiAddress').textContent = 'API · ' + API_BASE.replace(/^https?:\/\//, '');
   loadConfigs(false);
+  window.setInterval(loadAudioModelStatus, 5000);
 })();

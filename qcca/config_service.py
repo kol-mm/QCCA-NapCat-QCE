@@ -1,6 +1,8 @@
 import os
 import json
 import re
+import time
+import tempfile
 from threading import RLock
 from typing import Optional
 
@@ -78,6 +80,59 @@ def smtp_config_file() -> str:
     """返回接收端 QQ 邮箱 SMTP 配置文件的本机路径。"""
     config_dir = os.path.dirname(config_dir_file())
     return os.path.join(config_dir, "smtp.json")
+
+
+def audio_model_status_file() -> str:
+    """返回 Agent 写入的音频模型状态文件路径。"""
+    return os.path.join(os.path.dirname(config_dir_file()), "audio_model_status.json")
+
+
+def update_audio_model_status(status: str, message: str = "") -> None:
+    """原子写入音频模型状态，供独立运行的 API 读取。"""
+    path = audio_model_status_file()
+    payload = {
+        "status": status,
+        "message": message,
+        "updated_at": time.time(),
+    }
+    fd, temporary_path = tempfile.mkstemp(
+        prefix=".audio_model_status.", suffix=".tmp", dir=os.path.dirname(path)
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as file:
+            json.dump(payload, file, ensure_ascii=False)
+            file.flush()
+            os.fsync(file.fileno())
+        os.replace(temporary_path, path)
+    except OSError:
+        try:
+            os.unlink(temporary_path)
+        except OSError:
+            pass
+        raise
+
+
+def get_audio_model_status() -> dict:
+    """读取 Agent 状态；就绪状态超过 15 秒未心跳则视为已停止。"""
+    try:
+        with open(audio_model_status_file(), "r", encoding="utf-8") as file:
+            data = json.load(file)
+    except FileNotFoundError:
+        return {"status": "not_started", "message": "Agent 尚未上报音频模型状态"}
+    except (OSError, json.JSONDecodeError):
+        return {"status": "unknown", "message": "无法读取音频模型状态"}
+
+    status = data.get("status")
+    updated_at = data.get("updated_at")
+    if not isinstance(status, str) or not isinstance(updated_at, (int, float)):
+        return {"status": "unknown", "message": "音频模型状态格式无效"}
+    if status == "ready" and time.time() - updated_at > 15:
+        return {"status": "stopped", "message": "Agent 心跳已停止"}
+    return {
+        "status": status,
+        "message": data.get("message") if isinstance(data.get("message"), str) else "",
+        "updated_at": updated_at,
+    }
 
 
 def _normalize_smtp_config(data: object) -> dict:

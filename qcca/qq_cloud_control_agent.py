@@ -64,8 +64,14 @@ def amr_to_16k_wav(amr_file: str, wav_out: str) -> bool:
         print(f"转码失败：{ret.stderr}")
         return False
     return True
-model = AutoModel(model="paraformer-zh")
-print('模型加载成功')
+config_service.update_audio_model_status('loading', '正在加载语音识别模型')
+try:
+    model = AutoModel(model="paraformer-zh", disable_update=True)
+except Exception as exc:
+    config_service.update_audio_model_status('failed', f'模型加载失败：{exc}')
+    raise
+config_service.update_audio_model_status('ready', '语音识别模型已就绪')
+print('模型加载成功', flush=True)
 class myFileSystemEventHandler(FileSystemEventHandler):
     def __init__(self):
         super().__init__()
@@ -238,7 +244,7 @@ class myFileSystemEventHandler(FileSystemEventHandler):
             #     else:
             #         print('amr转wav失败')
 if __name__ == '__main__':
-    print('程序开始')
+    print('程序开始', flush=True)
     check_login_api()
     #创建系统目录
     work_path=os.path.expanduser(r'~\.qq-chat-exporter\qcca')
@@ -249,22 +255,26 @@ if __name__ == '__main__':
         pass
     myhandler=myFileSystemEventHandler()
     observer = Observer()
-    print('开始监听文件夹')
+    print('开始监听文件夹', flush=True)
 
     observer = Observer()
     watch_dir = os.path.abspath(os.path.expandvars(
         os.getenv('QCCA_WATCH_DIR', DEFAULT_WATCH_DIR)
     ))
     os.makedirs(watch_dir, exist_ok=True)
-    print(f'监听目录：{watch_dir}')
+    print(f'监听目录：{watch_dir}', flush=True)
     observer.schedule(myhandler, watch_dir, recursive=True)
-    print("开始监听文件夹，按 Ctrl+C 退出")
+    print("开始监听文件夹，按 Ctrl+C 退出", flush=True)
     observer.start()  # 后台线程开始监听
 
         # 主线程循环，保持程序不退出
     try:
+        heartbeat_at = 0.0
         while True:
                 time.sleep(1)
+                if time.monotonic() - heartbeat_at >= 5:
+                    config_service.update_audio_model_status('ready', '语音识别模型已就绪')
+                    heartbeat_at = time.monotonic()
     except KeyboardInterrupt:
         # 按下ctrl+c触发
         print("\n准备停止监听")
