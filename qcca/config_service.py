@@ -1,7 +1,10 @@
 import os
 import json
 import re
+from threading import RLock
 from typing import Optional
+
+_smtp_lock = RLock()
 
 
 def parse_sandbox_params(text: str) -> dict[str, str | None]:
@@ -83,7 +86,7 @@ def _normalize_smtp_config(data: object) -> dict:
     if isinstance(accounts, dict):
         for qq, account in accounts.items():
             if isinstance(qq, str) and qq.isdigit() and isinstance(account, dict):
-                auth_code = account.get("auth_code")
+                auth_code = account.get("auth_code", "")
                 result["accounts"][qq] = {
                     "auth_code": auth_code.strip() if isinstance(auth_code, str) else ""
                 }
@@ -94,22 +97,25 @@ def _normalize_smtp_config(data: object) -> dict:
 
     # 兼容此前的 {sender_qq, auth_code} 文件。
     sender_qq = data.get("sender_qq")
-    auth_code = data.get("auth_code")
+    auth_code = data.get("auth_code", "")
     if isinstance(sender_qq, str) and sender_qq.isdigit():
         result["accounts"][sender_qq] = {
             "auth_code": auth_code.strip() if isinstance(auth_code, str) else ""
         }
         result["selected_sender_qq"] = sender_qq
+    elif isinstance(auth_code, str) and auth_code:
+        result["_legacy_auth_code"] = auth_code
     return result
 
 
 def get_smtp_config() -> dict:
     """读取本机 SMTP 多账号配置。"""
     try:
-        with open(smtp_config_file(), "r", encoding="utf-8") as file:
-            return _normalize_smtp_config(json.load(file))
+        with _smtp_lock, open(smtp_config_file(), "r", encoding="utf-8") as file:
+            data = json.load(file)
     except (FileNotFoundError, json.JSONDecodeError, OSError, TypeError):
         return {"accounts": {}, "selected_sender_qq": None}
+    return _normalize_smtp_config(data)
 
 
 def get_smtp_auth_code() -> Optional[str]:
@@ -121,37 +127,62 @@ def get_smtp_auth_code() -> Optional[str]:
 
 def save_smtp_config(sender_qq: str, auth_code: str) -> None:
     """新增或更新 SMTP 发件 QQ，并将其设为当前发件账号。"""
-    config = get_smtp_config()
-    config["accounts"][sender_qq.strip()] = {"auth_code": auth_code.strip()}
-    config["selected_sender_qq"] = sender_qq.strip()
-    _write_smtp_config(config)
+    with _smtp_lock:
+        config = get_smtp_config()
+        config["accounts"][sender_qq.strip()] = {"auth_code": auth_code.strip()}
+        config["selected_sender_qq"] = sender_qq.strip()
+        _write_smtp_config(config)
 
 
 def ensure_smtp_account(sender_qq: str) -> dict:
     """为当前登录 QQ 预留账号配置；不会覆盖已有选择或授权码。"""
-    config = get_smtp_config()
-    if sender_qq not in config["accounts"]:
-        config["accounts"][sender_qq] = {"auth_code": ""}
+    with _smtp_lock:
+        config = get_smtp_config()
+        changed = False
+        if sender_qq not in config["accounts"]:
+            config["accounts"][sender_qq] = {"auth_code": config.pop("_legacy_auth_code", "")}
+            changed = True
         if not config["selected_sender_qq"]:
             config["selected_sender_qq"] = sender_qq
-        _write_smtp_config(config)
-    return config
+            changed = True
+        if changed:
+            _write_smtp_config(config)
+        return config
 
 
 def select_smtp_account(sender_qq: str) -> bool:
-    config = get_smtp_config()
-    if sender_qq not in config["accounts"]:
-        return False
-    config["selected_sender_qq"] = sender_qq
-    _write_smtp_config(config)
-    return True
+    with _smtp_lock:
+        config = get_smtp_config()
+        if sender_qq not in config["accounts"]:
+            return False
+        config["selected_sender_qq"] = sender_qq
+        _write_smtp_config(config)
+        return True
+
+
+def delete_smtp_account(sender_qq: str) -> bool:
+    with _smtp_lock:
+        config = get_smtp_config()
+        if sender_qq not in config["accounts"]:
+            return False
+        del config["accounts"][sender_qq]
+        if config.get("selected_sender_qq") == sender_qq:
+            config["selected_sender_qq"] = next(iter(config["accounts"]), None)
+        _write_smtp_config(config)
+        return True
 
 
 def _write_smtp_config(config: dict) -> None:
     path = smtp_config_file()
     temp_path = f"{path}.tmp"
     with open(temp_path, "w", encoding="utf-8") as file:
-        json.dump(config, file, ensure_ascii=False, indent=2)
+        safe = dict(config)
+        safe["accounts"] = {
+            qq: {"auth_code": account.get("auth_code", "")}
+            for qq, account in config.get("accounts", {}).items()
+        }
+        safe.pop("_legacy_auth_code", None)
+        json.dump(safe, file, ensure_ascii=False, indent=2)
         file.flush()
         os.fsync(file.fileno())
     os.replace(temp_path, path)

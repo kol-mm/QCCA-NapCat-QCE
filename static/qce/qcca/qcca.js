@@ -113,6 +113,8 @@
       option(senderSelect, account.qq, label);
     });
     senderSelect.value = state.smtpSenderQq;
+    var selected = state.smtpSenderQq;
+    byId('deleteSmtpButton').hidden = !selected || selected === state.smtpLoginQq;
     byId('smtpNewSenderQq').value = '';
     byId('smtpAuthCode').value = '';
   }
@@ -371,6 +373,18 @@
     }
   }
 
+  async function deleteSmtpConfig() {
+    var senderQq = state.smtpSenderQq;
+    if (!senderQq || senderQq === state.smtpLoginQq) return;
+    if (!window.confirm('删除发件 QQ ' + senderQq + ' 及其授权码？')) return;
+    try {
+      var result = await request('/qcca/smtp-config/' + encodeURIComponent(senderQq), { method: 'DELETE' });
+      applySmtpResult(result);
+      renderSmtpSettings();
+      toast('发件 QQ 已删除');
+    } catch (error) { toast(error.message, 'error'); }
+  }
+
   function closeDeleteModal() { byId('deleteModal').hidden = true; }
 
   async function deleteUser() {
@@ -393,6 +407,7 @@
   byId('confirmDeleteUser').addEventListener('click', deleteUser);
   byId('saveButton').addEventListener('click', saveUser);
   byId('saveSmtpButton').addEventListener('click', saveSmtpConfig);
+  byId('deleteSmtpButton').addEventListener('click', deleteSmtpConfig);
   byId('smtpSenderQq').addEventListener('change', async function () {
     var senderQq = byId('smtpSenderQq').value;
     if (!senderQq || senderQq === state.smtpSenderQq) return;

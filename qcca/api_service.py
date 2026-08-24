@@ -175,6 +175,15 @@ def select_smtp_config(sender_qq: str):
     return _smtp_response()
 
 
+@app.delete("/qcca/smtp-config/{sender_qq}")
+def delete_smtp_config(sender_qq: str):
+    if sender_qq == _get_current_login_qq():
+        raise HTTPException(status_code=400, detail="当前登录 QQ 的预留配置不能删除")
+    if not config_service.delete_smtp_account(sender_qq):
+        raise HTTPException(status_code=404, detail="发件 QQ 配置不存在")
+    return _smtp_response()
+
+
 @app.put("/qcca/config/update/{uid}")
 def update_qcca_config(uid: int, user: User):
     with _config_lock:
