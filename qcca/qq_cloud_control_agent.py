@@ -5,6 +5,8 @@ from watchdog.events import FileSystemEventHandler, DirCreatedEvent, FileCreated
 import json
 import io
 import threading
+import shutil
+import subprocess
 import pysilk
 import wave
 import os
@@ -45,6 +47,41 @@ def silk_to_wav(silk_path: str, wav_path: str) -> bool:
     except Exception as e:
         print(f"pysilk解码异常：{e}")
         return False
+
+
+def amr_to_16k_wav(amr_path: str, wav_path: str) -> bool:
+    """Silk 解码失败时，回退到 ffmpeg 的 AMR 转码。"""
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        print("ffmpeg 不在 PATH 中，无法执行 AMR 回退转码")
+        return False
+    try:
+        result = subprocess.run(
+            [
+                ffmpeg,
+                "-hide_banner",
+                "-loglevel", "error",
+                "-y",
+                "-i", amr_path,
+                "-acodec", "pcm_s16le",
+                "-ar", "16000",
+                "-ac", "1",
+                wav_path,
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=30,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        print(f"AMR 回退转码启动失败：{exc}")
+        return False
+    if result.returncode != 0:
+        print(f"AMR 回退转码失败：{result.stderr.strip()}")
+        return False
+    return os.path.isfile(wav_path) and os.path.getsize(wav_path) > 44
 
 
 audio_model = None
@@ -166,7 +203,11 @@ class myFileSystemEventHandler(FileSystemEventHandler):
                                     return
                                 wav_path = os.path.splitext(audio_path)[0] + '.wav'
                                 try:
-                                    if not silk_to_wav(audio_path, wav_path):
+                                    decoded = silk_to_wav(audio_path, wav_path)
+                                    if not decoded:
+                                        print('Silk 解码失败，尝试 AMR 回退转码')
+                                        decoded = amr_to_16k_wav(audio_path, wav_path)
+                                    if not decoded:
                                         send_email(receive_uid, send_uid, '语音解码失败，暂时无法识别该语音。')
                                         return
                                     text_list = audio_model.generate(input=wav_path)
