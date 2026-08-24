@@ -6,6 +6,8 @@ from json import JSONDecodeError
 from pathlib import Path
 from threading import RLock
 from typing import Dict
+from urllib.error import URLError
+from urllib.request import urlopen
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -98,6 +100,39 @@ def _model_to_dict(model: BaseModel) -> dict:
     return model.dict()
 
 
+def _get_current_login_qq() -> str | None:
+    try:
+        with urlopen("http://127.0.0.1:3000/get_login_info", timeout=2) as response:
+            data = json.loads(response.read().decode("utf-8"))
+        qq = data.get("data", {}).get("user_id")
+        return str(qq) if isinstance(qq, (str, int)) and str(qq).isdigit() else None
+    except (URLError, OSError, ValueError, json.JSONDecodeError):
+        return None
+
+
+def _smtp_response() -> dict:
+    login_qq = _get_current_login_qq()
+    try:
+        config = (
+            config_service.ensure_smtp_account(login_qq)
+            if login_qq else config_service.get_smtp_config()
+        )
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"无法保存 SMTP 配置：{exc}") from exc
+    accounts = config.get("accounts", {})
+    ordered_qqs = sorted(accounts, key=lambda qq: (qq != login_qq, qq))
+    selected = config.get("selected_sender_qq")
+    return {
+        "login_qq": login_qq,
+        "selected_sender_qq": selected,
+        "configured": bool(accounts.get(selected, {}).get("auth_code")),
+        "accounts": [
+            {"qq": qq, "configured": bool(accounts[qq].get("auth_code"))}
+            for qq in ordered_qqs
+        ],
+    }
+
+
 @app.get("/qcca/configs")
 def get_qcca_configs():
     return _read_users()
@@ -115,11 +150,7 @@ def get_qcca_config(uid: int):
 @app.get("/qcca/smtp-config")
 def get_smtp_config():
     """仅返回配置状态，授权码绝不通过接口回传。"""
-    config = config_service.get_smtp_config()
-    return {
-        "configured": bool(config["sender_qq"] and config["auth_code"]),
-        "sender_qq": config["sender_qq"],
-    }
+    return _smtp_response()
 
 
 @app.put("/qcca/smtp-config")
@@ -134,7 +165,14 @@ def update_smtp_config(config: SmtpConfigUpdate):
         config_service.save_smtp_config(sender_qq, auth_code)
     except OSError as exc:
         raise HTTPException(status_code=500, detail=f"无法保存 SMTP 配置：{exc}") from exc
-    return {"configured": True, "sender_qq": sender_qq}
+    return _smtp_response()
+
+
+@app.put("/qcca/smtp-config/select/{sender_qq}")
+def select_smtp_config(sender_qq: str):
+    if not config_service.select_smtp_account(sender_qq):
+        raise HTTPException(status_code=404, detail="发件 QQ 配置不存在")
+    return _smtp_response()
 
 
 @app.put("/qcca/config/update/{uid}")

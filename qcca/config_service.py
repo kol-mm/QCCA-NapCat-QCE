@@ -73,36 +73,85 @@ def smtp_config_file() -> str:
     return os.path.join(config_dir, "smtp.json")
 
 
-def get_smtp_config() -> dict[str, Optional[str]]:
-    """读取本机 SMTP 配置，兼容旧的环境变量授权码配置。"""
+def _normalize_smtp_config(data: object) -> dict:
+    """兼容旧版单账号 SMTP 配置，统一为多账号结构。"""
+    result = {"accounts": {}, "selected_sender_qq": None}
+    if not isinstance(data, dict):
+        return result
+
+    accounts = data.get("accounts")
+    if isinstance(accounts, dict):
+        for qq, account in accounts.items():
+            if isinstance(qq, str) and qq.isdigit() and isinstance(account, dict):
+                auth_code = account.get("auth_code")
+                result["accounts"][qq] = {
+                    "auth_code": auth_code.strip() if isinstance(auth_code, str) else ""
+                }
+        selected = data.get("selected_sender_qq")
+        if selected in result["accounts"]:
+            result["selected_sender_qq"] = selected
+        return result
+
+    # 兼容此前的 {sender_qq, auth_code} 文件。
+    sender_qq = data.get("sender_qq")
+    auth_code = data.get("auth_code")
+    if isinstance(sender_qq, str) and sender_qq.isdigit():
+        result["accounts"][sender_qq] = {
+            "auth_code": auth_code.strip() if isinstance(auth_code, str) else ""
+        }
+        result["selected_sender_qq"] = sender_qq
+    return result
+
+
+def get_smtp_config() -> dict:
+    """读取本机 SMTP 多账号配置。"""
     try:
         with open(smtp_config_file(), "r", encoding="utf-8") as file:
-            data = json.load(file)
-            sender_qq = data.get("sender_qq")
-            auth_code = data.get("auth_code")
-            return {
-                "sender_qq": sender_qq.strip() if isinstance(sender_qq, str) and sender_qq.strip() else None,
-                "auth_code": auth_code.strip() if isinstance(auth_code, str) and auth_code.strip() else None,
-            }
+            return _normalize_smtp_config(json.load(file))
     except (FileNotFoundError, json.JSONDecodeError, OSError, TypeError):
-        return {"sender_qq": None, "auth_code": os.environ.get("QCCA_SMTP_AUTH_CODE")}
+        return {"accounts": {}, "selected_sender_qq": None}
 
 
 def get_smtp_auth_code() -> Optional[str]:
-    return get_smtp_config()["auth_code"]
+    selected = get_smtp_config().get("selected_sender_qq")
+    if selected:
+        return get_smtp_config()["accounts"].get(selected, {}).get("auth_code") or None
+    return os.environ.get("QCCA_SMTP_AUTH_CODE")
 
 
 def save_smtp_config(sender_qq: str, auth_code: str) -> None:
-    """保存 SMTP 发件 QQ 与授权码，仅用于本机邮件回复。"""
+    """新增或更新 SMTP 发件 QQ，并将其设为当前发件账号。"""
+    config = get_smtp_config()
+    config["accounts"][sender_qq.strip()] = {"auth_code": auth_code.strip()}
+    config["selected_sender_qq"] = sender_qq.strip()
+    _write_smtp_config(config)
+
+
+def ensure_smtp_account(sender_qq: str) -> dict:
+    """为当前登录 QQ 预留账号配置；不会覆盖已有选择或授权码。"""
+    config = get_smtp_config()
+    if sender_qq not in config["accounts"]:
+        config["accounts"][sender_qq] = {"auth_code": ""}
+        if not config["selected_sender_qq"]:
+            config["selected_sender_qq"] = sender_qq
+        _write_smtp_config(config)
+    return config
+
+
+def select_smtp_account(sender_qq: str) -> bool:
+    config = get_smtp_config()
+    if sender_qq not in config["accounts"]:
+        return False
+    config["selected_sender_qq"] = sender_qq
+    _write_smtp_config(config)
+    return True
+
+
+def _write_smtp_config(config: dict) -> None:
     path = smtp_config_file()
     temp_path = f"{path}.tmp"
     with open(temp_path, "w", encoding="utf-8") as file:
-        json.dump(
-            {"sender_qq": sender_qq.strip(), "auth_code": auth_code.strip()},
-            file,
-            ensure_ascii=False,
-            indent=2,
-        )
+        json.dump(config, file, ensure_ascii=False, indent=2)
         file.flush()
         os.fsync(file.fileno())
     os.replace(temp_path, path)

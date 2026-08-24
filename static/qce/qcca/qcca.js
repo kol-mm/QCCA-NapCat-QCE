@@ -4,7 +4,7 @@
   var apiPort = new URLSearchParams(location.search).get('apiPort') || '40655';
   if (!/^\d{1,5}$/.test(apiPort) || Number(apiPort) < 1 || Number(apiPort) > 65535) apiPort = '40655';
   var API_BASE = 'http://' + (location.hostname === 'localhost' ? 'localhost' : '127.0.0.1') + ':' + apiPort;
-  var state = { configs: {}, selectedUid: null, draft: null, dirty: false, smtpConfigured: false, smtpSenderQq: '' };
+  var state = { configs: {}, selectedUid: null, draft: null, dirty: false, smtpConfigured: false, smtpSenderQq: '', smtpAccounts: [], smtpLoginQq: '' };
 
   var icons = {
     'arrow-left': '<path d="m12 19-7-7 7-7"/><path d="M19 12H5"/>',
@@ -74,8 +74,7 @@
     try {
       var responses = await Promise.all([request('/qcca/configs'), request('/qcca/smtp-config')]);
       state.configs = responses[0];
-      state.smtpConfigured = Boolean(responses[1].configured);
-      state.smtpSenderQq = responses[1].sender_qq || '';
+      applySmtpResult(responses[1]);
       setConnection(true, 'API 已连接');
       if (!keepSelection || !state.configs[state.selectedUid]) {
         state.selectedUid = Object.keys(state.configs).sort()[0] || null;
@@ -107,8 +106,22 @@
     var status = byId('smtpStatus');
     status.textContent = state.smtpConfigured ? '已配置' : '未配置';
     status.classList.toggle('configured', state.smtpConfigured);
-    byId('smtpSenderQq').value = state.smtpSenderQq;
+    var senderSelect = byId('smtpSenderQq');
+    senderSelect.replaceChildren();
+    state.smtpAccounts.forEach(function (account) {
+      var label = account.qq + (account.qq === state.smtpLoginQq ? '（当前登录）' : '') + (account.configured ? '' : '（未配置授权码）');
+      option(senderSelect, account.qq, label);
+    });
+    senderSelect.value = state.smtpSenderQq;
+    byId('smtpNewSenderQq').value = '';
     byId('smtpAuthCode').value = '';
+  }
+
+  function applySmtpResult(result) {
+    state.smtpConfigured = Boolean(result.configured);
+    state.smtpSenderQq = result.selected_sender_qq || '';
+    state.smtpAccounts = Array.isArray(result.accounts) ? result.accounts : [];
+    state.smtpLoginQq = result.login_qq || '';
   }
 
   function renderSidebar() {
@@ -326,7 +339,7 @@
   }
 
   async function saveSmtpConfig() {
-    var senderQq = byId('smtpSenderQq').value.trim();
+    var senderQq = byId('smtpNewSenderQq').value.trim() || byId('smtpSenderQq').value;
     var input = byId('smtpAuthCode');
     var authCode = input.value.trim();
     if (!/^\d{5,12}$/.test(senderQq)) {
@@ -348,8 +361,7 @@
         body: JSON.stringify({ sender_qq: senderQq, auth_code: authCode })
       });
       input.value = '';
-      state.smtpConfigured = true;
-      state.smtpSenderQq = result.sender_qq || senderQq;
+      applySmtpResult(result);
       renderSmtpSettings();
       toast('授权码已保存');
     } catch (error) {
@@ -381,6 +393,18 @@
   byId('confirmDeleteUser').addEventListener('click', deleteUser);
   byId('saveButton').addEventListener('click', saveUser);
   byId('saveSmtpButton').addEventListener('click', saveSmtpConfig);
+  byId('smtpSenderQq').addEventListener('change', async function () {
+    var senderQq = byId('smtpSenderQq').value;
+    if (!senderQq || senderQq === state.smtpSenderQq) return;
+    try {
+      var result = await request('/qcca/smtp-config/select/' + encodeURIComponent(senderQq), { method: 'PUT' });
+      applySmtpResult(result);
+      renderSmtpSettings();
+    } catch (error) {
+      toast(error.message, 'error');
+      renderSmtpSettings();
+    }
+  });
   byId('recentWorkspace').addEventListener('change', function () {
     state.draft.recent_workspace_and_session = {};
     renderRecentSelectors(byId('recentWorkspace').value);

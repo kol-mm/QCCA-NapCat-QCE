@@ -67,8 +67,12 @@
           </div>
           <div class="smtp-grid">
             <label class="field">
-              <span>发件 QQ 号</span>
-              <input id="smtpSenderQq" inputmode="numeric" autocomplete="off" placeholder="输入发件 QQ 号">
+              <span>发件 QQ 邮箱</span>
+              <select id="smtpSenderQq" aria-label="发件 QQ 邮箱"></select>
+            </label>
+            <label class="field">
+              <span>新增其他发件 QQ</span>
+              <input id="smtpNewSenderQq" inputmode="numeric" autocomplete="off" placeholder="仅添加其他 QQ 时填写">
             </label>
             <label class="field">
               <span>QQ 邮箱授权码</span>
