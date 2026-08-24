@@ -31,10 +31,12 @@
 ## Quick Start
 
 1. Extract the full package anywhere.
-2. Run `launcher-user.bat`.
+2. In a release package, double-click `QCCA-NapCat-QCE.exe`; from a source checkout, run `launcher-user.bat`.
 3. Sign in through the QQ client.
 4. Open `http://localhost:40653/qce` and enter the console access token.
 5. Open `http://localhost:40653/qce/qcca/` to manage QCCA.
+
+In a release package, the launcher console remains visible during the first QR-code login and is hidden automatically after NapCat reports a valid QQ number. The QQ client window itself remains visible.
 
 Run `start-standalone.bat` to browse already exported records without signing in to QQ. Standalone mode does not start QCCA.
 

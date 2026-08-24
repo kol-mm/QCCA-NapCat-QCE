@@ -33,10 +33,12 @@ QCCA-NapCat-QCE 将以下组件整合为一个 Windows 使用包：
 ## 开始使用
 
 1. 将完整包解压至任意目录。
-2. 运行 `launcher-user.bat`。
+2. 使用发行包时双击 `QCCA-NapCat-QCE.exe`；从源码目录运行时可执行 `launcher-user.bat`。
 3. 在 QQ 客户端完成登录。
 4. 打开 `http://localhost:40653/qce`，按控制台提示输入访问令牌。
 5. 打开 `http://localhost:40653/qce/qcca/` 管理 QCCA 配置。
+
+发行包首次扫码登录时，启动控制台会保持显示，用于展示二维码和启动状态；检测到 NapCat 返回有效 QQ 号后，`QCCA-NapCat-QCE.exe` 会自动隐藏该控制台。QQ 客户端窗口本身不会隐藏。
 
 如需隐藏启动器窗口，可运行 `启动QCCA隐藏.vbs`。它只隐藏 QCCA 的控制台窗口，NapCat 仍会正常启动。
 
@@ -98,7 +100,7 @@ QCCA API 文档的默认地址是 `http://127.0.0.1:40655/docs`。使用自定�
 
 ### 启动时提示 `Cannot find package 'express'`
 
-通常是安装包文件损坏或缺失。请重新下载官方完整包，完整解压并覆盖当前目录后重新运行 `launcher-user.bat`。
+通常是安装包文件损坏或缺失。请重新下载官方完整包，完整解压并覆盖当前目录后重新运行发行入口或 `launcher-user.bat`。
 
 ### QCCA 依赖安装失败
 
