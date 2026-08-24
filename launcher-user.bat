@@ -229,33 +229,14 @@ if not exist "%QCCA_VENV%\Scripts\python.exe" (
     echo [Info] Virtual environment created at: %QCCA_VENV%
 )
 
-rem 先检查 API 所需依赖；API 不应被 FunASR/Torch 安装阻塞。
-"%QCCA_PYTHON%" -c "import fastapi, uvicorn" >nul 2>&1
-if !errorLevel! neq 0 (
-    echo [Info] Installing API dependencies ^(domestic mirror^)...
-    "%QCCA_VENV%\Scripts\pip.exe" install -i https://pypi.tuna.tsinghua.edu.cn/simple --trusted-host pypi.tuna.tsinghua.edu.cn -r "%QCCA_DIR%\api-requirements.txt" >> "%QCCA_API_LOG%" 2>&1
-)
-
 if not defined QCCA_API_PORT set "QCCA_API_PORT=40655"
 echo [Info] Starting QCCA API at http://127.0.0.1:!QCCA_API_PORT!/docs ...
-powershell -NoProfile -ExecutionPolicy Bypass -File "%QCCA_DIR%\start-api.ps1" -PythonPath "%QCCA_PYTHON%" -WorkingDirectory "%QCCA_DIR%" -Port !QCCA_API_PORT! -OutputLog "%QCCA_API_LOG%.out" -ErrorLog "%QCCA_API_LOG%.err"
-if !errorLevel! neq 0 echo [Error] QCCA API process could not be started. See "%QCCA_API_LOG%.err".
-
-rem API 已独立启动后，再检查并安装 Agent 的重型依赖。
-"%QCCA_PYTHON%" -c "import watchdog, funasr, pysilk, torch, torchaudio, requests" >nul 2>&1
+powershell -NoProfile -ExecutionPolicy Bypass -File "%QCCA_DIR%\start-services.ps1" -PythonPath "%QCCA_PYTHON%" -QccaDirectory "%QCCA_DIR%" -Port !QCCA_API_PORT! -LogDirectory "%QCCA_LOG_DIR%"
 if !errorLevel! neq 0 (
-    echo [Info] Installing QCCA Agent dependencies ^(domestic mirror^)...
-    "%QCCA_VENV%\Scripts\pip.exe" install -i https://pypi.tuna.tsinghua.edu.cn/simple --trusted-host pypi.tuna.tsinghua.edu.cn -r "%QCCA_DIR%\requirements.txt" >> "%QCCA_AGENT_LOG%" 2>&1
-    if !errorLevel! neq 0 echo [Warning] Agent dependency installation failed. See "%QCCA_AGENT_LOG%".
+    echo [Error] QCCA service startup failed. See "%QCCA_LOG_DIR%\qcca-api.log.err" and "%QCCA_LOG_DIR%\qcca-agent.log.err".
 ) else (
-    echo [Info] QCCA dependencies already installed; skipping pip.
+    echo [Info] QCCA API and Agent started successfully. Health: http://127.0.0.1:!QCCA_API_PORT!/health
 )
-
-rem 后台启动 Agent，并保留日志，避免 pythonw 静默退出。
-echo [Info] Starting qq_cloud_control_agent in background...
-powershell -NoProfile -ExecutionPolicy Bypass -File "%QCCA_DIR%\start-agent.ps1" -PythonPath "%QCCA_PYTHON%" -WorkingDirectory "%QCCA_DIR%" -OutputLog "%QCCA_AGENT_LOG%.out" -ErrorLog "%QCCA_AGENT_LOG%.err"
-if !errorLevel! neq 0 echo [Error] QCCA Agent process could not be started. See "%QCCA_AGENT_LOG%.err".
-echo [Info] QCCA API and Agent startup requested. Check qcca-api.log and qcca-agent.log for errors.
 
 :qcca_done
 echo ============================================
