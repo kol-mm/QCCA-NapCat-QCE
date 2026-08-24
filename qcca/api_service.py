@@ -34,6 +34,12 @@ app.add_middleware(
     allow_headers=["Content-Type"],
 )
 
+
+@app.get("/health")
+def health_check():
+    """用于启动器和管理页面确认 API 已经完成启动。"""
+    return {"status": "ok", "service": "qcca-api"}
+
 _config_lock = RLock()
 
 

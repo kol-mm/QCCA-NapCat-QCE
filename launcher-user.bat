@@ -199,6 +199,10 @@ set "QCCA_DIR=%cd%\qcca"
 set "QCCA_VENV=%QCCA_DIR%\venv"
 set "QCCA_PYTHON=%QCCA_VENV%\Scripts\python.exe"
 set "QCCA_PYTHONW=%QCCA_VENV%\Scripts\pythonw.exe"
+set "QCCA_LOG_DIR=%QCE_LOG_DIR%"
+if not exist "%QCCA_LOG_DIR%" mkdir "%QCCA_LOG_DIR%"
+set "QCCA_API_LOG=%QCCA_LOG_DIR%\qcca-api.log"
+set "QCCA_AGENT_LOG=%QCCA_LOG_DIR%\qcca-agent.log"
 
 rem 检查 QCCA 模块是否存在
 if not exist "%QCCA_DIR%\qq_cloud_control_agent.py" (
@@ -210,7 +214,7 @@ rem 检查 Python 是否可用
 where python >nul 2>&1
 if !errorLevel! neq 0 (
     echo [Warning] Python not found, skipping QCCA.
-    echo [Info] Please install Python 3.8+ from https://www.python.org/
+    echo [Info] Please install Python 3.10+ from https://www.python.org/
     goto :qcca_done
 )
 
@@ -225,30 +229,35 @@ if not exist "%QCCA_VENV%\Scripts\python.exe" (
     echo [Info] Virtual environment created at: %QCCA_VENV%
 )
 
-if not exist "%QCCA_PYTHONW%" set "QCCA_PYTHONW=%QCCA_PYTHON%"
-
-rem 使用国内镜像安装依赖
-echo [Info] Installing QCCA dependencies ^(domestic mirror^)...
-"%QCCA_VENV%\Scripts\pip.exe" install ^
-    -i https://pypi.tuna.tsinghua.edu.cn/simple ^
-    --trusted-host pypi.tuna.tsinghua.edu.cn ^
-    -r "%QCCA_DIR%\requirements.txt"
-
+rem 先检查 API 所需依赖；API 不应被 FunASR/Torch 安装阻塞。
+"%QCCA_PYTHON%" -c "import fastapi, uvicorn" >nul 2>&1
 if !errorLevel! neq 0 (
-    echo [Warning] Some dependencies may not have installed correctly.
-) else (
-    echo [Info] QCCA dependencies installed successfully.
+    echo [Info] Installing API dependencies ^(domestic mirror^)...
+    "%QCCA_VENV%\Scripts\pip.exe" install -i https://pypi.tuna.tsinghua.edu.cn/simple --trusted-host pypi.tuna.tsinghua.edu.cn "fastapi>=0.110,<0.116" "uvicorn[standard]>=0.27,<0.34" >> "%QCCA_API_LOG%" 2>&1
 )
 
-rem 后台启动 qq_cloud_control_agent，避免额外控制台窗口
-echo [Info] Starting qq_cloud_control_agent in background...
-pushd "%QCCA_DIR%"
-start "QCCA Agent" /b "%QCCA_PYTHONW%" qq_cloud_control_agent.py
 if not defined QCCA_API_PORT set "QCCA_API_PORT=40655"
 echo [Info] Starting QCCA API at http://127.0.0.1:!QCCA_API_PORT!/docs ...
-start "QCCA API" /b "%QCCA_PYTHONW%" -m uvicorn api_service:app --host 127.0.0.1 --port !QCCA_API_PORT!
+pushd "%QCCA_DIR%"
+start "QCCA API" /b cmd /d /c ""%QCCA_PYTHON%" -m uvicorn api_service:app --host 127.0.0.1 --port !QCCA_API_PORT! >> "%QCCA_API_LOG%" 2>&1"
 popd
-echo [Info] QCCA agent and API started in background.
+
+rem API 已独立启动后，再检查并安装 Agent 的重型依赖。
+"%QCCA_PYTHON%" -c "import watchdog, funasr, pysilk, torch, torchaudio, requests" >nul 2>&1
+if !errorLevel! neq 0 (
+    echo [Info] Installing QCCA Agent dependencies ^(domestic mirror^)...
+    "%QCCA_VENV%\Scripts\pip.exe" install -i https://pypi.tuna.tsinghua.edu.cn/simple --trusted-host pypi.tuna.tsinghua.edu.cn -r "%QCCA_DIR%\requirements.txt" >> "%QCCA_AGENT_LOG%" 2>&1
+    if !errorLevel! neq 0 echo [Warning] Agent dependency installation failed. See "%QCCA_AGENT_LOG%".
+) else (
+    echo [Info] QCCA dependencies already installed; skipping pip.
+)
+
+rem 后台启动 Agent，并保留日志，避免 pythonw 静默退出。
+echo [Info] Starting qq_cloud_control_agent in background...
+pushd "%QCCA_DIR%"
+start "QCCA Agent" /b cmd /d /c ""%QCCA_PYTHON%" qq_cloud_control_agent.py >> "%QCCA_AGENT_LOG%" 2>&1"
+popd
+echo [Info] QCCA API and Agent startup requested. Check qcca-api.log and qcca-agent.log for errors.
 
 :qcca_done
 echo ============================================
