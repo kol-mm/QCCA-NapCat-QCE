@@ -233,13 +233,13 @@ rem 先检查 API 所需依赖；API 不应被 FunASR/Torch 安装阻塞。
 "%QCCA_PYTHON%" -c "import fastapi, uvicorn" >nul 2>&1
 if !errorLevel! neq 0 (
     echo [Info] Installing API dependencies ^(domestic mirror^)...
-    "%QCCA_VENV%\Scripts\pip.exe" install -i https://pypi.tuna.tsinghua.edu.cn/simple --trusted-host pypi.tuna.tsinghua.edu.cn "fastapi>=0.110,<0.116" "uvicorn[standard]>=0.27,<0.34" >> "%QCCA_API_LOG%" 2>&1
+    "%QCCA_VENV%\Scripts\pip.exe" install -i https://pypi.tuna.tsinghua.edu.cn/simple --trusted-host pypi.tuna.tsinghua.edu.cn -r "%QCCA_DIR%\api-requirements.txt" >> "%QCCA_API_LOG%" 2>&1
 )
 
 if not defined QCCA_API_PORT set "QCCA_API_PORT=40655"
 echo [Info] Starting QCCA API at http://127.0.0.1:!QCCA_API_PORT!/docs ...
 pushd "%QCCA_DIR%"
-start "QCCA API" /b cmd /d /c ""%QCCA_PYTHON%" -m uvicorn api_service:app --host 127.0.0.1 --port !QCCA_API_PORT! >> "%QCCA_API_LOG%" 2>&1"
+start "QCCA API" /b "%QCCA_PYTHON%" -m uvicorn api_service:app --host 127.0.0.1 --port !QCCA_API_PORT! >> "%QCCA_API_LOG%" 2>&1
 popd
 
 rem API 已独立启动后，再检查并安装 Agent 的重型依赖。
@@ -255,7 +255,7 @@ if !errorLevel! neq 0 (
 rem 后台启动 Agent，并保留日志，避免 pythonw 静默退出。
 echo [Info] Starting qq_cloud_control_agent in background...
 pushd "%QCCA_DIR%"
-start "QCCA Agent" /b cmd /d /c ""%QCCA_PYTHON%" qq_cloud_control_agent.py >> "%QCCA_AGENT_LOG%" 2>&1"
+start "QCCA Agent" /b "%QCCA_PYTHON%" qq_cloud_control_agent.py >> "%QCCA_AGENT_LOG%" 2>&1
 popd
 echo [Info] QCCA API and Agent startup requested. Check qcca-api.log and qcca-agent.log for errors.
 
