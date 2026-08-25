@@ -74,22 +74,26 @@
             <span class="smtp-status" id="smtpStatus">正在读取</span>
           </div>
           <div class="smtp-grid">
-            <label class="field">
-              <span>发件 QQ 邮箱</span>
-              <select id="smtpSenderQq" aria-label="发件 QQ 邮箱"></select>
-            </label>
-            <button class="button secondary" id="deleteSmtpButton" type="button" title="删除当前选中的其他发件 QQ">删除其他 QQ</button>
-            <label class="field">
-              <span>新增其他发件 QQ</span>
-              <input id="smtpNewSenderQq" inputmode="numeric" autocomplete="off" placeholder="仅添加其他 QQ 时填写">
-            </label>
-            <label class="field">
-              <span>QQ 邮箱授权码</span>
-              <input id="smtpAuthCode" type="password" autocomplete="new-password" placeholder="输入 16 位 QQ 邮箱授权码">
-            </label>
-            <button class="button primary" id="saveSmtpButton" type="button">
-              <span data-icon="save"></span><span>保存授权码</span>
-            </button>
+            <div class="smtp-account-row">
+              <label class="field">
+                <span>发件 QQ 邮箱</span>
+                <select id="smtpSenderQq" aria-label="发件 QQ 邮箱"></select>
+              </label>
+              <button class="button secondary" id="deleteSmtpButton" type="button" title="删除当前选中的其他发件 QQ">删除其他 QQ</button>
+            </div>
+            <div class="smtp-credential-row">
+              <label class="field">
+                <span>新增其他发件 QQ</span>
+                <input id="smtpNewSenderQq" inputmode="numeric" autocomplete="off" placeholder="仅添加其他 QQ 时填写">
+              </label>
+              <label class="field">
+                <span>QQ 邮箱授权码</span>
+                <input id="smtpAuthCode" type="password" autocomplete="new-password" placeholder="输入 16 位 QQ 邮箱授权码">
+              </label>
+              <button class="button primary" id="saveSmtpButton" type="button">
+                <span data-icon="save"></span><span>保存授权码</span>
+              </button>
+            </div>
           </div>
         </section>
 
