@@ -119,6 +119,7 @@
     byId('deleteSmtpButton').hidden = !selected || selected === state.smtpLoginQq;
     byId('smtpNewSenderQq').value = '';
     byId('smtpAuthCode').value = '';
+    byId('smtpNewAuthCode').value = '';
   }
 
   function renderAudioModelStatus() {
@@ -369,11 +370,11 @@
   }
 
   async function saveSmtpConfig() {
-    var senderQq = byId('smtpNewSenderQq').value.trim() || byId('smtpSenderQq').value;
+    var senderQq = byId('smtpSenderQq').value;
     var input = byId('smtpAuthCode');
     var authCode = input.value.trim();
     if (!/^\d{5,12}$/.test(senderQq)) {
-      toast('请输入有效的发件 QQ 号', 'error');
+      toast('请选择要更新的发件 QQ', 'error');
       byId('smtpSenderQq').focus();
       return;
     }
@@ -393,7 +394,40 @@
       input.value = '';
       applySmtpResult(result);
       renderSmtpSettings();
-      toast('授权码已保存');
+      toast('授权码已更新');
+    } catch (error) {
+      toast(error.message, 'error');
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  async function addSmtpConfig() {
+    var senderInput = byId('smtpNewSenderQq');
+    var authInput = byId('smtpNewAuthCode');
+    var senderQq = senderInput.value.trim();
+    var authCode = authInput.value.trim();
+    if (!/^\d{5,12}$/.test(senderQq)) {
+      toast('请输入有效的新增发件 QQ 号', 'error');
+      senderInput.focus();
+      return;
+    }
+    if (!authCode) {
+      toast('请输入该 QQ 的邮箱授权码', 'error');
+      authInput.focus();
+      return;
+    }
+    var button = byId('addSmtpButton');
+    button.disabled = true;
+    try {
+      var result = await request('/qcca/smtp-config', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sender_qq: senderQq, auth_code: authCode })
+      });
+      applySmtpResult(result);
+      renderSmtpSettings();
+      toast('发件 QQ 已新增并设为当前账号');
     } catch (error) {
       toast(error.message, 'error');
     } finally {
@@ -435,6 +469,7 @@
   byId('confirmDeleteUser').addEventListener('click', deleteUser);
   byId('saveButton').addEventListener('click', saveUser);
   byId('saveSmtpButton').addEventListener('click', saveSmtpConfig);
+  byId('addSmtpButton').addEventListener('click', addSmtpConfig);
   byId('deleteSmtpButton').addEventListener('click', deleteSmtpConfig);
   byId('smtpSenderQq').addEventListener('change', async function () {
     var senderQq = byId('smtpSenderQq').value;
