@@ -26,7 +26,7 @@ function Test-PythonImports {
     param([string[]]$Modules)
     $importStatement = "import " + ($Modules -join ", ")
     $previousErrorAction = $ErrorActionPreference
-    $ErrorActionPreference = "Continue"
+    $ErrorActionPreference = "SilentlyContinue"
     try {
         & $PythonPath -c $importStatement 1>$null 2>$null
         $exitCode = $LASTEXITCODE
@@ -56,12 +56,21 @@ function Install-Requirements {
             $pipArguments += @("--trusted-host", "pypi.tuna.tsinghua.edu.cn")
         }
 
-        & $PythonPath @pipArguments *>> $ErrorLog
-        if ($LASTEXITCODE -eq 0) {
+        # pip writes warnings such as package deprecations to stderr. Keep that
+        # output in the log, but do not let PowerShell treat it as an exception.
+        $previousErrorAction = $ErrorActionPreference
+        $ErrorActionPreference = "SilentlyContinue"
+        try {
+            & $PythonPath @pipArguments *>> $ErrorLog
+            $pipExitCode = $LASTEXITCODE
+        } finally {
+            $ErrorActionPreference = $previousErrorAction
+        }
+        if ($pipExitCode -eq 0) {
             Add-Content -LiteralPath $ErrorLog -Value "[$Component] Dependencies installed successfully."
             return $true
         }
-        Add-Content -LiteralPath $ErrorLog -Value "[$Component] Package index failed with exit code $LASTEXITCODE."
+        Add-Content -LiteralPath $ErrorLog -Value "[$Component] Package index failed with exit code $pipExitCode."
     }
 
     Add-Content -LiteralPath $ErrorLog -Value "[$Component] All package indexes failed. Check network access and the full log above."
