@@ -18,6 +18,7 @@ build/
 .qcca/
 qcca/workspace/
 qcca/**/smtp.json
+qcca/test.py
 qcca/*.wav
 qcca/*.amr
 qcca/*.silk
@@ -65,6 +66,7 @@ pnpm-debug.log*
 
 # -------------------- 生成文件 --------------------
 loadNapCat.js
+qqnt.json
 
 # -------------------- 备份与临时文件 --------------------
 *.bak
