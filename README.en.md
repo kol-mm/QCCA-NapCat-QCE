@@ -16,7 +16,7 @@
 | --- | --- |
 | [NapCatQQ](https://github.com/NapNeko/NapCatQQ) | v4.18.19, QQ and OneBot interface |
 | [QQ Chat Exporter](https://github.com/shuakami/qq-chat-exporter) | v5.5.80, export and browse QQ chat records |
-| QCCA | Watches messages, invokes Codex, and replies through QQ Mail |
+| QCCA | v1.0.1; watches messages, invokes coding agents, and replies through QQ Mail |
 | QCCA API | Local FastAPI management service |
 
 ## Features
@@ -37,6 +37,8 @@
 5. Open `http://localhost:40653/qce/qcca/` to manage QCCA.
 
 In a release package, the launcher console remains visible during the first QR-code login and is hidden automatically after NapCat reports a valid QQ number. The QQ client window itself remains visible.
+
+When the hidden launcher is running, QCCA shows an icon in the Windows notification area. Double-click it to open the management page, or right-click it to check status, stop QCCA, or exit QQ, NapCat, and QCCA.
 
 Run `start-standalone.bat` to browse already exported records without signing in to QQ. Standalone mode does not start QCCA.
 

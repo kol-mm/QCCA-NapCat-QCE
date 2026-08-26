@@ -18,7 +18,7 @@ QCCA-NapCat-QCE 将以下组件整合为一个 Windows 使用包：
 | --- | --- |
 | NapCat | v4.18.19，提供 QQ 与 OneBot 接口 |
 | QQ Chat Exporter | v5.5.80，导出并浏览 QQ 聊天记录 |
-| QCCA | 处理 live-capture 消息、调用 Codex，并通过 QQ 邮箱回复 |
+| QCCA | v1.0.1，处理 live-capture 消息、调用编码 Agent，并通过 QQ 邮箱回复 |
 | QCCA API | 基于 FastAPI 的本地管理服务 |
 
 ## 功能
