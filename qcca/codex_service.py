@@ -109,30 +109,6 @@ def codex_control(
         raise RuntimeError("\n".join(error_list))
 
     return "\n".join(out_list), resume
-# def codex_control(context:str,workspace:str,resume:Optional[str]=None,sandbox:str='read-only'):
-#     cmd_list=['codex','exec','--json','--skip-git-repo-check','-C',workspace,'--sandbox',sandbox,context]
-#     if resume:
-#         cmd_list.extend(['resume',resume])
-#     stdout_list=subprocess.run(
-#         cmd_list,
-#         capture_output=True,
-#         encoding="utf-8"
-#     ).stdout
-#     out_list=[]
-#     for line in stdout_list.split('\n'):
-#         if line.strip() == '':
-#             continue
-#         try:
-#             line_json = json.loads(line.strip())
-#         except json.JSONDecodeError as e:
-#             continue
-#         if line_json.get('type') =='thread.started':
-#              resume=line_json.get('thread_id')
-#         if line_json.get('type') == 'item.completed':
-#             if line_json.get('item').get('type')== 'agent_message':
-#                 out_list.append(line_json.get('item').get('text'))
-#                 print(line_json.get('item').get('text'))
-#     return '\n'.join(out_list),resume
 def codex_run(uid,context:str,workspace:Optional[str]=None,session:Optional[str]=None,sandbox:str=None):
     config_path=config.config_dir_file()
     config_dict = {}
