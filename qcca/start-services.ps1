@@ -6,6 +6,11 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+# PowerShell 7 can promote stderr from native commands to terminating errors.
+# Import checks intentionally use a non-zero exit code when a module is absent.
+if (Get-Variable -Name PSNativeCommandUseErrorActionPreference -ErrorAction SilentlyContinue) {
+    $PSNativeCommandUseErrorActionPreference = $false
+}
 New-Item -ItemType Directory -Path $LogDirectory -Force | Out-Null
 $apiOut = Join-Path $LogDirectory "qcca-api.log.out"
 $apiErr = Join-Path $LogDirectory "qcca-api.log.err"
@@ -20,8 +25,15 @@ function Start-HiddenService {
 function Test-PythonImports {
     param([string[]]$Modules)
     $importStatement = "import " + ($Modules -join ", ")
-    & $PythonPath -c $importStatement *> $null
-    return ($LASTEXITCODE -eq 0)
+    $previousErrorAction = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        & $PythonPath -c $importStatement 1>$null 2>$null
+        $exitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousErrorAction
+    }
+    return ($exitCode -eq 0)
 }
 
 function Install-Requirements {
