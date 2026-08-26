@@ -236,6 +236,9 @@ if !errorLevel! neq 0 (
     echo [Error] QCCA service startup failed. See "%QCCA_LOG_DIR%\qcca-api.log.err" and "%QCCA_LOG_DIR%\qcca-agent.log.err".
 ) else (
     echo [Info] QCCA API and Agent started successfully. Health: http://127.0.0.1:!QCCA_API_PORT!/health
+    rem Launch a tray controller so hidden services can be stopped without a console.
+    set "QCCA_API_PORT=!QCCA_API_PORT!"
+    start "QCCA Tray" /min powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hidden -File "%QCCA_DIR%\qcca-tray.ps1"
 )
 
 :qcca_done

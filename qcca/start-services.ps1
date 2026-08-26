@@ -19,7 +19,14 @@ $agentErr = Join-Path $LogDirectory "qcca-agent.log.err"
 
 function Start-HiddenService {
     param([string[]]$Arguments, [string]$OutputLog, [string]$ErrorLog)
-    Start-Process -FilePath $PythonPath -ArgumentList $Arguments -WorkingDirectory $QccaDirectory -WindowStyle Hidden -RedirectStandardOutput $OutputLog -RedirectStandardError $ErrorLog | Out-Null
+    return Start-Process -FilePath $PythonPath -ArgumentList $Arguments -WorkingDirectory $QccaDirectory -WindowStyle Hidden -RedirectStandardOutput $OutputLog -RedirectStandardError $ErrorLog -PassThru
+}
+
+function Save-ServicePid {
+    param([System.Diagnostics.Process]$Process, [string]$Name)
+    if ($Process -and $Process.Id) {
+        Set-Content -LiteralPath (Join-Path $LogDirectory "qcca-$Name.pid") -Value ([string]$Process.Id) -Encoding ASCII
+    }
 }
 
 function Test-PythonImports {
@@ -94,7 +101,8 @@ if (-not (Test-PythonImports @("fastapi", "uvicorn"))) {
     }
 }
 
-Start-HiddenService @("-m", "uvicorn", "api_service:app", "--host", "127.0.0.1", "--port", [string]$Port) $apiOut $apiErr
+$apiProcess = Start-HiddenService @("-m", "uvicorn", "api_service:app", "--host", "127.0.0.1", "--port", [string]$Port) $apiOut $apiErr
+Save-ServicePid $apiProcess "api"
 $healthUrl = "http://127.0.0.1:$Port/health"
 $apiReady = $false
 for ($attempt = 0; $attempt -lt 20; $attempt++) {
@@ -121,7 +129,8 @@ if (-not (Test-PythonImports @("watchdog", "funasr", "pysilk", "torch", "torchau
     }
 }
 
-Start-HiddenService @("-u", "qq_cloud_control_agent.py") $agentOut $agentErr
+$agentProcess = Start-HiddenService @("-u", "qq_cloud_control_agent.py") $agentOut $agentErr
+Save-ServicePid $agentProcess "agent"
 if (-not $apiReady) { exit 1 }
 $env:PYTHONUTF8 = $previousPythonUtf8
 exit 0
