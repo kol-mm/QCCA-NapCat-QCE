@@ -24,7 +24,13 @@
     if (!settingsEntry || !settingsEntry.parentElement) return;
 
     var entry = document.createElement('a');
-    entry.href = '/qce/qcca/';
+    var apiPort = new URLSearchParams(location.search).get('apiPort') || '';
+    try { apiPort = apiPort || window.localStorage.getItem('qccaApiPort') || ''; } catch (error) {}
+    if (/^\d{1,5}$/.test(apiPort) && Number(apiPort) >= 1 && Number(apiPort) <= 65535) {
+      entry.href = '/qce/qcca/?apiPort=' + encodeURIComponent(apiPort);
+    } else {
+      entry.href = '/qce/qcca/';
+    }
     entry.className = settingsEntry.className;
     entry.dataset.qccaNavigation = 'true';
     entry.style.textDecoration = 'none';

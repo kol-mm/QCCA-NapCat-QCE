@@ -391,14 +391,27 @@ export async function plugin_onmessage(ctx, event) {
 
     const token = await resolveAccessToken();
     if (!token) return;
-    await fetch(`http://127.0.0.1:${INGEST_PORT}/api/live-capture/ingest`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`
-      },
-      body: JSON.stringify(raw)
-    });
+    const ingestUrl = `http://127.0.0.1:${INGEST_PORT}/api/live-capture/ingest`;
+    let lastError;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        const response = await fetch(ingestUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`
+          },
+          body: JSON.stringify(raw)
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        lastError = null;
+        break;
+      } catch (error) {
+        lastError = error;
+        if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 250 * (attempt + 1)));
+      }
+    }
+    if (lastError) throw lastError;
   } catch (error) {
     console.warn('[QCE] live-capture ingest failed:', error?.message || error);
   }

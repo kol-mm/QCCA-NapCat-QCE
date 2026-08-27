@@ -25,7 +25,20 @@ function Start-HiddenService {
 function Save-ServicePid {
     param([System.Diagnostics.Process]$Process, [string]$Name)
     if ($Process -and $Process.Id) {
-        Set-Content -LiteralPath (Join-Path $LogDirectory "qcca-$Name.pid") -Value ([string]$Process.Id) -Encoding ASCII
+        $startTicks = 0
+        try { $startTicks = $Process.StartTime.Ticks } catch { }
+        Set-Content -LiteralPath (Join-Path $LogDirectory "qcca-$Name.pid") -Value ("{0}|{1}" -f $Process.Id, $startTicks) -Encoding ASCII
+    }
+}
+
+function Stop-StartedService {
+    param([System.Diagnostics.Process]$Process, [string]$Name)
+    if ($Process -and -not $Process.HasExited) {
+        try { & taskkill.exe /PID $Process.Id /T /F *> $null } catch { }
+    }
+    $pidFile = Join-Path $LogDirectory "qcca-$Name.pid"
+    if (Test-Path -LiteralPath $pidFile) {
+        Remove-Item -LiteralPath $pidFile -Force -ErrorAction SilentlyContinue
     }
 }
 
@@ -114,23 +127,46 @@ for ($attempt = 0; $attempt -lt 20; $attempt++) {
 }
 if (-not $apiReady) {
     Add-Content -LiteralPath $apiErr -Value "QCCA API health check failed: $healthUrl"
+    Stop-StartedService $apiProcess "api"
+    $env:PYTHONUTF8 = $previousPythonUtf8
+    exit 1
 }
 
 if (-not (Test-PythonImports @("watchdog", "funasr", "pysilk", "torch", "torchaudio", "requests"))) {
     if (-not (Install-Requirements (Join-Path $QccaDirectory "requirements.txt") $agentErr "Agent")) {
         Add-Content -LiteralPath $agentErr -Value "[Agent] Agent dependencies failed to install; Agent was not started."
         Get-Content -LiteralPath $agentErr -Tail 25 | ForEach-Object { Write-Host $_ }
+        Stop-StartedService $apiProcess "api"
+        $env:PYTHONUTF8 = $previousPythonUtf8
         exit 1
     }
     if (-not (Test-PythonImports @("watchdog", "funasr", "pysilk", "torch", "torchaudio", "requests"))) {
         Add-Content -LiteralPath $agentErr -Value "[Agent] Dependencies were installed, but one or more Agent modules still cannot be imported."
         Get-Content -LiteralPath $agentErr -Tail 25 | ForEach-Object { Write-Host $_ }
+        Stop-StartedService $apiProcess "api"
+        $env:PYTHONUTF8 = $previousPythonUtf8
         exit 1
     }
 }
 
-$agentProcess = Start-HiddenService @("-u", "qq_cloud_control_agent.py") $agentOut $agentErr
-Save-ServicePid $agentProcess "agent"
-if (-not $apiReady) { exit 1 }
+try {
+    $agentProcess = Start-HiddenService @("-u", "qq_cloud_control_agent.py") $agentOut $agentErr
+    Save-ServicePid $agentProcess "agent"
+    # Catch immediate import/startup failures instead of reporting a false success.
+    Start-Sleep -Milliseconds 750
+    $agentProcess.Refresh()
+    if ($agentProcess.HasExited) {
+        Add-Content -LiteralPath $agentErr -Value "[Agent] Agent exited during startup with code $($agentProcess.ExitCode)."
+        Stop-StartedService $agentProcess "agent"
+        Stop-StartedService $apiProcess "api"
+        $env:PYTHONUTF8 = $previousPythonUtf8
+        exit 1
+    }
+} catch {
+    Add-Content -LiteralPath $agentErr -Value "[Agent] Failed to start Agent: $($_.Exception.Message)"
+    Stop-StartedService $apiProcess "api"
+    $env:PYTHONUTF8 = $previousPythonUtf8
+    exit 1
+}
 $env:PYTHONUTF8 = $previousPythonUtf8
 exit 0

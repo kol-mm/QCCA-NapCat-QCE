@@ -20,6 +20,94 @@ LOGIN_INFO_URL = "http://127.0.0.1:3000/get_login_info"
 MAX_SESSION_LIST_LINES = 30
 DEFAULT_WATCH_DIR = os.path.expanduser(r"~\Documents\QQChatExporter\live-capture")
 
+
+def get_current_session_context(uid: str):
+    """Return the current configured workspace, session name and UUID."""
+    user = config_service.dict_user_exist(uid)
+    if not isinstance(user, dict):
+        return None
+
+    recent = user.get('recent_workspace_and_session', {})
+    if not isinstance(recent, dict) or not recent:
+        return None
+    workspace, session = next(iter(recent.items()))
+    workspaces = user.get('workspaces', {})
+    if not isinstance(workspaces, dict):
+        return None
+    workspace_data = workspaces.get(workspace)
+    if not isinstance(workspace_data, dict):
+        return None
+    sessions = workspace_data.get('sessions', {})
+    if not isinstance(sessions, dict):
+        return None
+    return {
+        'uid': uid,
+        'workspace': workspace,
+        'session': session,
+        'session_id': config_service.session_id(sessions.get(session)),
+    }
+
+
+def get_current_session_id(uid: str):
+    """Return the UUID of the QQ user's current configured session."""
+    context = get_current_session_context(uid)
+    return context.get('session_id') if context else None
+
+
+def get_target_session_context(uid: str, workspace: str | None, session: str | None):
+    """Resolve the workspace/session that codex_run will use for this request.
+
+    A switch command can target a different workspace or create a new session.
+    Resolve that target before invoking Codex so the management page does not
+    briefly display the previous session as active.
+    """
+    user = config_service.dict_user_exist(uid)
+    if not isinstance(user, dict):
+        return {'uid': uid, 'workspace': workspace, 'session': session, 'session_id': None}
+
+    recent = user.get('recent_workspace_and_session', {})
+    recent_workspace = next(iter(recent), None) if isinstance(recent, dict) else None
+    target_workspace = workspace or recent_workspace
+    if not target_workspace:
+        return {'uid': uid, 'workspace': None, 'session': session, 'session_id': None}
+
+    workspaces = user.get('workspaces', {})
+    workspace_data = workspaces.get(target_workspace) if isinstance(workspaces, dict) else None
+    sessions = workspace_data.get('sessions', {}) if isinstance(workspace_data, dict) else {}
+    target_session = session
+    if not target_session and target_workspace == recent_workspace and isinstance(recent, dict):
+        target_session = recent.get(recent_workspace)
+
+    value = sessions.get(target_session) if isinstance(sessions, dict) and target_session else None
+    return {
+        'uid': uid,
+        'workspace': target_workspace,
+        'session': target_session,
+        'session_id': config_service.session_id(value),
+    }
+
+
+def publish_agent_status(status: str, **context) -> None:
+    """Publish status without allowing status-file errors to affect Agent work."""
+    try:
+        config_service.update_agent_status(status, **context)
+    except OSError as e:
+        print(f'写入 Agent 状态失败: {e}')
+
+
+def save_chat_record(uid: str, user_content: str, assistant_content: str) -> None:
+    """Save a normal user/agent exchange under the active session UUID."""
+    try:
+        session_id = get_current_session_id(uid)
+        if not session_id:
+            print(f'未找到 QQ {uid} 的会话 UUID，跳过聊天记录保存')
+            return
+        config_service.MemoryLine('user', user_content, session_id)
+        config_service.MemoryLine('assistant', assistant_content, session_id)
+    except (OSError, TypeError, ValueError, KeyError, AttributeError) as e:
+        # 记录保存失败不应影响原有消息回复流程。
+        print(f'保存 QQ {uid} 聊天记录失败: {e}')
+
 def check_login_api() -> bool:
     try:
         response = requests.get(LOGIN_INFO_URL, timeout=5)
@@ -262,7 +350,11 @@ class myFileSystemEventHandler(FileSystemEventHandler):
                             else:
                                 lines = ['已保存的工作区和会话：']
                                 for workspace, data in user.get('workspaces', {}).items():
-                                    sessions = ', '.join(str(item) for item in data.get('sessions', {}).keys())
+                                    session_items = []
+                                    for name, value in data.get('sessions', {}).items():
+                                        sid = config_service.session_id(value)
+                                        session_items.append(f'{name}（{sid}）' if sid else str(name))
+                                    sessions = ', '.join(session_items)
                                     lines.append(f'- {workspace}: {sessions or "无会话"}')
                                     if len(lines) >= MAX_SESSION_LIST_LINES:
                                         lines.append('... 内容过长，已截断。')
@@ -285,15 +377,41 @@ class myFileSystemEventHandler(FileSystemEventHandler):
                                 print('没有可处理的消息')
                                 return
                             params = self.user_params.pop(send_uid, {})
-                            agent_text = codex_run(
+                            current = get_current_session_context(send_uid) or {}
+                            target = get_target_session_context(
                                 send_uid,
-                                combined_text,
                                 params.get('workspace'),
                                 params.get('session'),
-                                params.get('sandbox'),
                             )
+                            publish_agent_status(
+                                'running',
+                                uid=send_uid,
+                                workspace=target.get('workspace') or current.get('workspace'),
+                                session=target.get('session') or '待创建',
+                                session_id=target.get('session_id'),
+                                message='正在调用编码 Agent',
+                            )
+                            try:
+                                agent_text = codex_run(
+                                    send_uid,
+                                    combined_text,
+                                    params.get('workspace'),
+                                    params.get('session'),
+                                    params.get('sandbox'),
+                                )
+                            finally:
+                                finished = get_current_session_context(send_uid) or current
+                                publish_agent_status(
+                                    'idle',
+                                    uid=send_uid,
+                                    workspace=finished.get('workspace'),
+                                    session=finished.get('session'),
+                                    session_id=finished.get('session_id'),
+                                    message='Agent 空闲',
+                                )
                             # print(''.join(data_list))
                             print(agent_text)
+                            save_chat_record(send_uid, combined_text, agent_text)
                             send_email(receive_uid, send_uid, agent_text)
                 except Exception as e:
                     print(f'文件{event.src_path}处理失败:{e}')
@@ -316,10 +434,13 @@ class myFileSystemEventHandler(FileSystemEventHandler):
 if __name__ == '__main__':
     print('程序开始', flush=True)
     check_login_api()
+    publish_agent_status('idle', message='Agent 已启动')
     threading.Thread(target=load_audio_model, name='qcca-audio-model', daemon=True).start()
     #创建系统目录
     work_path=os.path.expanduser(r'~\.qq-chat-exporter\qcca')
+    record_path = os.path.join(work_path, 'record')
     os.makedirs(work_path,exist_ok=True)
+    os.makedirs(record_path,exist_ok=True)
     #创建工作目录
     os.makedirs(work_path+r'\workspace',exist_ok=True)
     with open(work_path+r'\workspace\config.json','a',encoding='utf-8') as f:
@@ -346,9 +467,8 @@ if __name__ == '__main__':
     except KeyboardInterrupt:
         # 按下ctrl+c触发
         print("\n准备停止监听")
+        publish_agent_status('stopped', message='Agent 已停止')
         observer.stop()
 
         observer.join()  # 等待observer线程完全结束
         print("程序退出")
-
-

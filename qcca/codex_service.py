@@ -36,12 +36,11 @@ def codex_control(
         workspace,
         "--sandbox",
         sandbox,
-        context,
     ]
 
     if resume:
         cmd_list.extend(["resume", resume])
-
+    cmd_list.append(context)
     try:
         result = subprocess.run(
             cmd_list,
@@ -121,6 +120,8 @@ def codex_run(uid,context:str,workspace:Optional[str]=None,session:Optional[str]
         else:
             config_dict = {}
         user = config_dict.get(uid)
+        if config.migrate_user_config(config_dict):
+            config.write_user_config(config_path, config_dict)
     except (FileNotFoundError, PermissionError, OSError, json.JSONDecodeError) as e:
         return f'抱歉出现了一些错误:{e}'
     try:
@@ -137,7 +138,7 @@ def codex_run(uid,context:str,workspace:Optional[str]=None,session:Optional[str]
                     user['workspaces'][recent_workspace]['sandbox'] = sandbox if sandbox else recent_sandbox
                     codex_answer, resume = codex_control(context, recent_workspace, recent_resume,
                                                          user['workspaces'][recent_workspace]['sandbox'])
-                    user['workspaces'][recent_workspace]['sessions'][session] = resume
+                    user['workspaces'][recent_workspace]['sessions'][session] = {'id': config.session_id(user['workspaces'][recent_workspace]['sessions'][session]) or str(uuid.uuid4()), 'resume': resume}
                     config.write_user_config(config_path, config_dict)
                     return f'工作空间:{recent_workspace},会话:{session}\n' + codex_answer.strip()
                 else:
@@ -158,11 +159,11 @@ def codex_run(uid,context:str,workspace:Optional[str]=None,session:Optional[str]
             else:
                 if workspace == recent_workspace or not workspace:
                     if session in user['workspaces'][recent_workspace]['sessions']:
-                        resume = user['workspaces'][recent_workspace]['sessions'][session]
+                        resume = config.session_resume(user['workspaces'][recent_workspace]['sessions'][session])
                         user['workspaces'][recent_workspace]['sandbox'] = sandbox if sandbox else recent_sandbox
                         codex_answer, resume = codex_control(context, recent_workspace, resume,
                                                              user['workspaces'][recent_workspace]['sandbox'])
-                        user['workspaces'][recent_workspace]['sessions'][session] = resume
+                        user['workspaces'][recent_workspace]['sessions'][session]['resume'] = resume
                         config.set_user_recent_session(config_dict, config_path, uid, recent_workspace, session)
                         return f'工作空间:{recent_workspace},会话:{session}\n' + codex_answer.strip()
                     else:
@@ -178,9 +179,9 @@ def codex_run(uid,context:str,workspace:Optional[str]=None,session:Optional[str]
                         if session in user['workspaces'][workspace]['sessions']:
 
                             codex_answer, resume = codex_control(context, workspace,
-                                                                 user['workspaces'][workspace]['sessions'][session],
+                                                                 config.session_resume(user['workspaces'][workspace]['sessions'][session]),
                                                                  user['workspaces'][workspace]['sandbox'])
-                            user['workspaces'][workspace]['sessions'][session] = resume
+                            user['workspaces'][workspace]['sessions'][session]['resume'] = resume
                             config.set_user_recent_session(config_dict, config_path, uid, workspace, session)
                             return f'工作空间:{workspace},会话:{session}\n' + codex_answer.strip()
                         else:

@@ -1,10 +1,14 @@
 (function () {
   'use strict';
 
-  var apiPort = new URLSearchParams(location.search).get('apiPort') || '40655';
+  var queryApiPort = new URLSearchParams(location.search).get('apiPort');
+  var savedApiPort = '';
+  try { savedApiPort = window.localStorage.getItem('qccaApiPort') || ''; } catch (error) {}
+  var apiPort = queryApiPort || savedApiPort || '40655';
   if (!/^\d{1,5}$/.test(apiPort) || Number(apiPort) < 1 || Number(apiPort) > 65535) apiPort = '40655';
+  try { window.localStorage.setItem('qccaApiPort', apiPort); } catch (error) {}
   var API_BASE = 'http://' + (location.hostname === 'localhost' ? 'localhost' : '127.0.0.1') + ':' + apiPort;
-  var state = { configs: {}, selectedUid: null, draft: null, dirty: false, smtpConfigured: false, smtpSenderQq: '', smtpAccounts: [], smtpLoginQq: '', audioModel: { status: 'unknown', message: '' } };
+  var state = { configs: {}, selectedUid: null, draft: null, dirty: false, smtpConfigured: false, smtpSenderQq: '', smtpAccounts: [], smtpLoginQq: '', audioModel: { status: 'unknown', message: '' }, agentStatus: { status: 'unknown', message: '' }, chatRecords: null, chatRecordsSessionId: null, chatRecordsLoading: false };
 
   var icons = {
     'arrow-left': '<path d="m12 19-7-7 7-7"/><path d="M19 12H5"/>',
@@ -72,10 +76,16 @@
   async function loadConfigs(keepSelection) {
     setConnection(false, '正在连接');
     try {
-      var responses = await Promise.all([request('/qcca/configs'), request('/qcca/smtp-config'), request('/qcca/audio-model-status')]);
+      // 配置和 SMTP 是页面的核心数据；状态接口缺失时仍允许管理页面打开。
+      var responses = await Promise.all([request('/qcca/configs'), request('/qcca/smtp-config')]);
       state.configs = responses[0];
       applySmtpResult(responses[1]);
-      state.audioModel = responses[2];
+      var optional = await Promise.all([
+        request('/qcca/audio-model-status').catch(function () { return { status: 'unknown', message: '暂无语音模型状态' }; }),
+        request('/qcca/agent-status').catch(function () { return { status: 'unknown', message: '暂无 Agent 状态' }; })
+      ]);
+      state.audioModel = optional[0];
+      state.agentStatus = optional[1];
       setConnection(true, 'API 已连接');
       if (!keepSelection || !state.configs[state.selectedUid]) {
         state.selectedUid = Object.keys(state.configs).sort()[0] || null;
@@ -83,6 +93,7 @@
       state.draft = state.selectedUid ? clone(state.configs[state.selectedUid]) : null;
       state.dirty = false;
       render();
+      loadSessionRecords();
     } catch (error) {
       setConnection(false, 'API 未连接');
       toast(error.message, 'error');
@@ -93,6 +104,8 @@
   function render() {
     renderSidebar();
     renderAudioModelStatus();
+    renderAgentStatus();
+    renderChatRecords();
     renderSmtpSettings();
     var hasUser = Boolean(state.selectedUid && state.draft);
     byId('emptyState').hidden = hasUser;
@@ -148,6 +161,125 @@
     renderAudioModelStatus();
   }
 
+  async function loadAgentStatus() {
+    try {
+      state.agentStatus = await request('/qcca/agent-status');
+    } catch (error) {
+      state.agentStatus = { status: 'unknown', message: '无法连接 QCCA API' };
+    }
+    renderAgentStatus();
+  }
+
+  function renderAgentStatus() {
+    var current = state.agentStatus || {};
+    var labels = {
+      not_started: 'Agent 未启动',
+      running: '正在调用 Agent',
+      idle: 'Agent 空闲',
+      stopped: 'Agent 已停止',
+      unknown: '状态未知'
+    };
+    var value = current.status || 'unknown';
+    var badge = byId('agentStatusBadge');
+    badge.textContent = labels[value] || '状态未知';
+    badge.className = 'agent-status ' + value;
+    byId('agentStatusDetail').textContent = current.message || '暂无状态说明';
+    byId('agentWorkspace').textContent = current.workspace || '未调用';
+    byId('agentSession').textContent = current.session || '未调用';
+    byId('agentSessionId').textContent = current.session_id || '未调用';
+  }
+
+  function selectedSession() {
+    var workspace = byId('recentWorkspace').value;
+    var session = byId('recentSession').value;
+    if (!workspace || !session || !workspaces()[workspace]) return null;
+    var value = (workspaces()[workspace].sessions || {})[session];
+    return { workspace: workspace, session: session, id: value && typeof value === 'object' ? value.id : null };
+  }
+
+  function renderChatRecords() {
+    var list = byId('chatRecordList');
+    var detail = byId('chatRecordDetail');
+    list.replaceChildren();
+    var selected = selectedSession();
+    if (!selected || !selected.id) {
+      detail.textContent = '选择已有会话后加载记录';
+      var empty = document.createElement('div');
+      empty.className = 'no-sessions';
+      empty.textContent = '当前会话没有可读取的记录';
+      list.appendChild(empty);
+      return;
+    }
+    if (state.chatRecordsLoading && state.chatRecordsSessionId === selected.id) {
+      detail.textContent = '正在加载记录';
+      var loading = document.createElement('div');
+      loading.className = 'no-sessions';
+      loading.textContent = '正在读取聊天记录...';
+      list.appendChild(loading);
+      return;
+    }
+    if (state.chatRecordsSessionId !== selected.id || !Array.isArray(state.chatRecords)) {
+      detail.textContent = '等待加载记录';
+      var waiting = document.createElement('div');
+      waiting.className = 'no-sessions';
+      waiting.textContent = '正在准备聊天记录';
+      list.appendChild(waiting);
+      return;
+    }
+    detail.textContent = state.chatRecords.length + ' 条记录 · 会话 ID ' + selected.id;
+    if (!state.chatRecords.length) {
+      var none = document.createElement('div');
+      none.className = 'no-sessions';
+      none.textContent = '该会话暂无聊天记录';
+      list.appendChild(none);
+      return;
+    }
+    state.chatRecords.forEach(function (record) {
+      var item = document.createElement('article');
+      item.className = 'chat-record ' + (record.role === 'assistant' ? 'assistant' : 'user');
+      var heading = document.createElement('div');
+      heading.className = 'chat-record-heading';
+      var role = document.createElement('strong');
+      role.textContent = record.role === 'assistant' ? 'Agent' : '用户';
+      var time = document.createElement('time');
+      time.textContent = record.time || '';
+      heading.append(role, time);
+      var content = document.createElement('p');
+      content.textContent = record.content == null ? '' : String(record.content);
+      item.append(heading, content);
+      list.appendChild(item);
+    });
+  }
+
+  async function loadSessionRecords(force) {
+    var selected = selectedSession();
+    if (!selected || !selected.id) {
+      state.chatRecords = null;
+      state.chatRecordsSessionId = null;
+      state.chatRecordsLoading = false;
+      renderChatRecords();
+      return;
+    }
+    if (!force && state.chatRecordsSessionId === selected.id && Array.isArray(state.chatRecords)) return;
+    var sessionId = selected.id;
+    state.chatRecordsSessionId = sessionId;
+    state.chatRecordsLoading = true;
+    renderChatRecords();
+    try {
+      var result = await request('/qcca/records/' + encodeURIComponent(sessionId));
+      var current = selectedSession();
+      if (current && current.id === sessionId) state.chatRecords = Array.isArray(result.records) ? result.records : [];
+    } catch (error) {
+      if (state.chatRecordsSessionId === sessionId) {
+        state.chatRecords = [];
+        toast(error.message, 'error');
+      }
+    } finally {
+      if (state.chatRecordsSessionId === sessionId) state.chatRecordsLoading = false;
+      renderChatRecords();
+    }
+  }
+
   function applySmtpResult(result) {
     state.smtpConfigured = Boolean(result.configured);
     state.smtpSenderQq = result.selected_sender_qq || '';
@@ -180,6 +312,7 @@
     state.draft = clone(state.configs[uid]);
     state.dirty = false;
     render();
+    loadSessionRecords();
   }
 
   function setDirty() {
@@ -274,7 +407,10 @@
       var nameInput = row.querySelector('.session-name');
       var resumeInput = row.querySelector('.session-resume');
       nameInput.value = sessionName;
-      resumeInput.value = entry[1] || '';
+      var session = entry[1];
+      resumeInput.value = session && typeof session === 'object'
+        ? ((session.id || '') + (session.resume ? ' · resume: ' + session.resume : ''))
+        : (session || '');
       list.appendChild(row);
     });
   }
@@ -463,6 +599,7 @@
   }
 
   byId('refreshButton').addEventListener('click', function () { loadConfigs(true); });
+  byId('refreshRecordsButton').addEventListener('click', function () { loadSessionRecords(true); });
   byId('userSearch').addEventListener('input', renderSidebar);
   document.querySelectorAll('[data-close-delete]').forEach(function (button) { button.addEventListener('click', closeDeleteModal); });
   byId('deleteUserButton').addEventListener('click', function () { byId('deleteModal').hidden = false; });
@@ -487,12 +624,14 @@
     state.draft.recent_workspace_and_session = {};
     renderRecentSelectors(byId('recentWorkspace').value);
     setDirty();
+    loadSessionRecords();
   });
   byId('recentSession').addEventListener('change', function () {
     var workspace = byId('recentWorkspace').value;
     var session = byId('recentSession').value;
     state.draft.recent_workspace_and_session = workspace && session ? Object.fromEntries([[workspace, session]]) : {};
     setDirty();
+    loadSessionRecords();
   });
   window.addEventListener('beforeunload', function (event) { if (state.dirty) { event.preventDefault(); event.returnValue = ''; } });
 
@@ -500,4 +639,6 @@
   byId('apiAddress').textContent = 'API · ' + API_BASE.replace(/^https?:\/\//, '');
   loadConfigs(false);
   window.setInterval(loadAudioModelStatus, 5000);
+  window.setInterval(loadAgentStatus, 2000);
+  window.setInterval(function () { if (state.selectedUid) loadSessionRecords(true); }, 5000);
 })();

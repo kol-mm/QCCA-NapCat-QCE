@@ -13,9 +13,18 @@ function Stop-Tree([int]$ProcessId) {
 foreach ($name in @("api", "agent")) {
     $pidFile = Join-Path $logDirectory "qcca-$name.pid"
     if (Test-Path -LiteralPath $pidFile) {
-        $rawPid = Get-Content -LiteralPath $pidFile -Raw
+        $rawPid = (Get-Content -LiteralPath $pidFile -Raw).Trim()
         $servicePid = 0
-        if ([int]::TryParse($rawPid.Trim(), [ref]$servicePid)) { Stop-Tree $servicePid }
+        $parts = $rawPid -split '\|', 2
+        $expectedTicks = 0L
+        $validPid = [int]::TryParse($parts[0], [ref]$servicePid)
+        $hasIdentity = $parts.Count -eq 2 -and [long]::TryParse($parts[1], [ref]$expectedTicks) -and $expectedTicks -gt 0
+        if ($validPid -and $hasIdentity) {
+            try {
+                $process = Get-Process -Id $servicePid -ErrorAction Stop
+                if ($process.StartTime.Ticks -eq $expectedTicks) { Stop-Tree $servicePid }
+            } catch { }
+        }
         Remove-Item -LiteralPath $pidFile -Force
     }
 }

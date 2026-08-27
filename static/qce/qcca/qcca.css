@@ -138,6 +138,24 @@ button { color: inherit; }
 .model-status.ready { color: var(--green); }
 .model-status.loading { color: var(--blue); }
 .model-status.failed, .model-status.stopped { color: var(--red); }
+.agent-monitor, .chat-records { margin-bottom: 28px; padding: 20px 22px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; }
+.agent-monitor .section-heading, .chat-records .section-heading { margin-bottom: 16px; }
+.agent-status { flex: 0 0 auto; padding: 4px 8px; color: var(--muted); background: var(--surface-alt); border: 1px solid var(--border); border-radius: 999px; font-size: 12px; white-space: nowrap; }
+.agent-status.running { color: var(--blue); }
+.agent-status.idle { color: var(--green); }
+.agent-status.stopped, .agent-status.unknown { color: var(--red); }
+.agent-context { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.agent-context div { min-width: 0; padding: 11px 12px; background: var(--surface-alt); border: 1px solid var(--border); border-radius: 6px; }
+.agent-context span { display: block; margin-bottom: 5px; color: var(--muted); font-size: 11px; }
+.agent-context strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.chat-record-list { display: flex; flex-direction: column; gap: 10px; max-height: 560px; overflow-y: auto; }
+.chat-record { padding: 12px 14px; border: 1px solid var(--border); border-left: 3px solid var(--border-strong); border-radius: 6px; background: var(--surface-alt); }
+.chat-record.user { border-left-color: var(--blue); }
+.chat-record.assistant { border-left-color: var(--green); }
+.chat-record-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 7px; }
+.chat-record-heading strong { font-size: 12px; }
+.chat-record-heading time { color: var(--muted); font-size: 11px; }
+.chat-record p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.6; }
 .smtp-settings { margin-bottom: 32px; padding: 22px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; }
 .smtp-settings .section-heading { margin-bottom: 16px; }
 .smtp-status { padding: 4px 8px; color: var(--muted); background: var(--surface-alt); border: 1px solid var(--border); border-radius: 999px; font-size: 12px; white-space: nowrap; }
@@ -244,6 +262,7 @@ svg.lucide { display: block; fill: none; stroke: currentColor; stroke-width: 2; 
   .smtp-account-row, .smtp-new-account-row { grid-template-columns: 1fr; }
   .smtp-account-row .button, .smtp-new-account-row .button { width: 100%; }
   .audio-model-settings { align-items: flex-start; }
+  .agent-context { grid-template-columns: 1fr; }
   .workspace-header { grid-template-columns: 1fr; }
   .workspace-header > .icon-button { justify-self: end; }
   .session-row { grid-template-columns: 1fr; }

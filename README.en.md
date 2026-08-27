@@ -2,6 +2,12 @@
 
 > A Windows x64 bundle built on NapCatQQ and QQ Chat Exporter, with QCCA message processing and a local management page.
 
+<p align="center">
+  <img src="qcca/qcca-app-icon.png" alt="QCCA icon" width="180">
+</p>
+
+<p align="center"><strong>A local, practical bridge from QQ messages to searchable records and automated replies.</strong></p>
+
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 [![Platform: Windows x64](https://img.shields.io/badge/Platform-Windows%20x64-0078D4.svg)](#requirements)
 [![Python: 3.10+](https://img.shields.io/badge/Python-3.10%2B-3776AB.svg)](#requirements)
@@ -10,13 +16,25 @@
 
 ---
 
+## At A Glance
+
+QCCA-NapCat-QCE connects QQ login, chat archiving, and message automation in one Windows package: NapCat receives messages, QQ Chat Exporter stores and displays them, QCCA watches live events and invokes a coding agent, and QQ Mail delivers the response back to the sender.
+
+<p align="center">
+  <img src="static/assets/logo-C2MGgWT2.png" alt="QCE project mark" width="220">
+  &nbsp;&nbsp;&nbsp;
+  <img src="static/qce/device.png" alt="Local web interface device artwork" width="180">
+</p>
+
+These images are existing project and frontend assets. The QCCA icon is also used by the release launcher and tray menu.
+
 ## Overview
 
 | Component | Version / purpose |
 | --- | --- |
 | [NapCatQQ](https://github.com/NapNeko/NapCatQQ) | v4.18.19, QQ and OneBot interface |
 | [QQ Chat Exporter](https://github.com/shuakami/qq-chat-exporter) | v5.5.80, export and browse QQ chat records |
-| QCCA | v1.0.1; watches messages, invokes coding agents, and replies through QQ Mail |
+| QCCA | v1.1.0; watches messages, invokes coding agents, and replies through QQ Mail |
 | QCCA API | Local FastAPI management service |
 
 ## Features
@@ -27,6 +45,26 @@
 - Transcribe voice messages with FunASR before processing.
 - Reply to message senders through QQ Mail SMTP.
 - Manage workspace sandbox permissions and sender accounts from a local web page.
+- The management page shows whether the Agent is running and displays its target workspace, session, and session ID.
+- Select a workspace and session to view saved chat records; the page displays the latest 200 records.
+
+### Message flow
+
+```text
+QQ / NapCat
+    -> QQ Chat Exporter live capture
+    -> QCCA Agent (text, speech recognition, Codex)
+    -> QQ Mail reply
+```
+
+All services bind to `127.0.0.1` by default. Data and authorization codes remain on the local computer, making the bundle suitable for a personal or isolated LAN setup.
+
+## What's New In 1.1.0
+
+- The management page now shows live Agent status, including the active workspace, session, and session ID.
+- Chat records can be opened by selecting a session; the page displays the latest 200 records.
+- Each session stores its records in a separate UUID-named JSONL file for easier backup and troubleshooting.
+- The source tree and release directories now use the same record endpoints and storage paths.
 
 ## Quick Start
 
@@ -50,6 +88,12 @@ The currently signed-in QQ is reserved automatically as an SMTP sender. SMTP aut
 
 ```text
 %USERPROFILE%\.qq-chat-exporter\qcca\workspace\smtp.json
+```
+
+Session chat records are stored as JSONL, with one UUID-named file per session:
+
+```text
+%USERPROFILE%\.qq-chat-exporter\qcca\record\<session-id>.jsonl
 ```
 
 The default watched directory is `%USERPROFILE%\Documents\QQChatExporter\live-capture`. Set `QCCA_WATCH_DIR` before launch to change it. Set `QCCA_API_PORT` to change the API port.

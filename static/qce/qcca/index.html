@@ -133,6 +133,32 @@
             </div>
           </section>
 
+          <section class="agent-monitor" aria-labelledby="agentMonitorTitle">
+            <div class="section-heading">
+              <div>
+                <h2 id="agentMonitorTitle">Agent 状态</h2>
+                <p id="agentStatusDetail">等待状态</p>
+              </div>
+              <span class="agent-status" id="agentStatusBadge">正在读取</span>
+            </div>
+            <div class="agent-context">
+              <div><span>工作区</span><strong id="agentWorkspace">未调用</strong></div>
+              <div><span>会话</span><strong id="agentSession">未调用</strong></div>
+              <div><span>会话 ID</span><strong id="agentSessionId">未调用</strong></div>
+            </div>
+          </section>
+
+          <section class="chat-records" aria-labelledby="chatRecordsTitle">
+            <div class="section-heading">
+              <div>
+                <h2 id="chatRecordsTitle">聊天记录</h2>
+                <p id="chatRecordDetail">选择会话后加载记录</p>
+              </div>
+              <button class="icon-button compact" id="refreshRecordsButton" type="button" aria-label="刷新聊天记录" title="刷新聊天记录" data-icon="refresh-cw"></button>
+            </div>
+            <div class="chat-record-list" id="chatRecordList"></div>
+          </section>
+
           <section class="workspace-section">
             <div class="section-heading">
               <div>

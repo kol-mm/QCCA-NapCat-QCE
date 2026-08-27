@@ -5,7 +5,7 @@ from contextlib import suppress
 from json import JSONDecodeError
 from pathlib import Path
 from threading import RLock
-from typing import Dict
+from typing import Any, Dict
 from urllib.error import URLError
 from urllib.request import urlopen
 
@@ -19,7 +19,7 @@ import config_service
 app = FastAPI(
     title="QCCA API",
     description="QCCA 配置管理 API",
-    version="1.0.1",
+    version="1.1.0",
     license_info={"name": "GPL-3.0"},
 )
 _qce_web_port = os.getenv("QCE_SERVER_PORT", "40653")
@@ -46,12 +46,32 @@ def get_audio_model_status():
     """返回独立 Agent 上报的语音识别模型状态。"""
     return config_service.get_audio_model_status()
 
+
+@app.get("/qcca/agent-status")
+def get_agent_status():
+    """Return whether QCCA Agent is idle or currently invoking an agent."""
+    return config_service.get_agent_status()
+
+
+@app.get("/qcca/records/{session_id}")
+def get_session_records(session_id: str):
+    """Return the JSONL chat records associated with one session UUID."""
+    try:
+        records = config_service.ReadMemory(session_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {
+        'session_id': session_id,
+        'total': len(records),
+        'records': records[-200:],
+    }
+
 _config_lock = RLock()
 
 
 class Workspace(BaseModel):
     sandbox: str = "read-only"
-    sessions: Dict[str, str]
+    sessions: Dict[str, Any]
 
 
 class User(BaseModel):
@@ -69,6 +89,11 @@ def _config_path() -> Path:
 
 
 def _read_users() -> dict:
+    with config_service.user_config_file_lock():
+        return _read_users_unlocked()
+
+
+def _read_users_unlocked() -> dict:
     try:
         with _config_lock, _config_path().open("r", encoding="utf-8") as file:
             data = json.load(file)
@@ -79,10 +104,17 @@ def _read_users() -> dict:
 
     if not isinstance(data, dict):
         raise HTTPException(status_code=500, detail="QCCA 配置根节点必须是对象")
+    if config_service.migrate_user_config(data):
+        _write_users_unlocked(data)
     return data
 
 
 def _write_users(users: dict) -> None:
+    with config_service.user_config_file_lock():
+        _write_users_unlocked(users)
+
+
+def _write_users_unlocked(users: dict) -> None:
     config_path = _config_path()
     temporary_path = None
     try:
@@ -207,8 +239,8 @@ def delete_smtp_config(sender_qq: str):
 
 @app.put("/qcca/config/update/{uid}")
 def update_qcca_config(uid: int, user: User):
-    with _config_lock:
-        users = _read_users()
+    with _config_lock, config_service.user_config_file_lock():
+        users = _read_users_unlocked()
         if str(uid) not in users:
             raise HTTPException(status_code=404, detail="QQ 用户配置不存在")
         updated = _model_to_dict(user)
@@ -221,14 +253,14 @@ def update_qcca_config(uid: int, user: User):
             if current_workspace.get("sessions", {}) != updated_workspaces[workspace_name].get("sessions", {}):
                 raise HTTPException(status_code=400, detail="会话由 QCCA 自动管理，不能修改")
         users[str(uid)] = updated
-        _write_users(users)
+        _write_users_unlocked(users)
     return True
 
 
 @app.delete("/qcca/config/delete/{uid}")
 def delete_qcca_config(uid: int):
-    with _config_lock:
-        users = _read_users()
+    with _config_lock, config_service.user_config_file_lock():
+        users = _read_users_unlocked()
         users.pop(str(uid), None)
-        _write_users(users)
+        _write_users_unlocked(users)
     return True

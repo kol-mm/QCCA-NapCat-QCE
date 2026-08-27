@@ -2,6 +2,12 @@
 
 > 基于 NapCatQQ 与 QQ Chat Exporter 的 Windows x64 整合项目，提供聊天记录导出、QCCA 消息处理和本地管理页面。
 
+<p align="center">
+  <img src="qcca/qcca-app-icon.png" alt="QCCA 图标" width="180">
+</p>
+
+<p align="center"><strong>让 QQ 消息流转、记录与自动化处理在同一台 Windows 电脑上协同工作。</strong></p>
+
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 [![Platform: Windows x64](https://img.shields.io/badge/Platform-Windows%20x64-0078D4.svg)](#系统要求)
 [![Python: 3.10+](https://img.shields.io/badge/Python-3.10%2B-3776AB.svg)](#系统要求)
@@ -9,6 +15,18 @@
 **语言 / Language:** [中文](README.md) | [English](README.en.md)
 
 ---
+
+## 项目一览
+
+QCCA-NapCat-QCE 把 QQ 登录接入、聊天记录归档和消息自动化串成一条清晰的本地链路：NapCat 接收消息，QQ Chat Exporter 保存并展示记录，QCCA 监听实时消息并调用编码 Agent，最终通过 QQ 邮箱把结果送回发送者。
+
+<p align="center">
+  <img src="static/assets/logo-C2MGgWT2.png" alt="QCE 项目标志" width="220">
+  &nbsp;&nbsp;&nbsp;
+  <img src="static/qce/device.png" alt="本地 Web 界面设备图" width="180">
+</p>
+
+上面的资源来自项目现有前端与品牌素材；QCCA 专属图标也会用于发行版入口和托盘菜单。
 
 ## 简介
 
@@ -18,7 +36,7 @@ QCCA-NapCat-QCE 将以下组件整合为一个 Windows 使用包：
 | --- | --- |
 | NapCat | v4.18.19，提供 QQ 与 OneBot 接口 |
 | QQ Chat Exporter | v5.5.80，导出并浏览 QQ 聊天记录 |
-| QCCA | v1.0.1，处理 live-capture 消息、调用编码 Agent，并通过 QQ 邮箱回复 |
+| QCCA | v1.1.0，处理 live-capture 消息、调用编码 Agent，并通过 QQ 邮箱回复 |
 | QCCA API | 基于 FastAPI 的本地管理服务 |
 
 ## 功能
@@ -29,6 +47,24 @@ QCCA-NapCat-QCE 将以下组件整合为一个 Windows 使用包：
 - 将语音消息通过 FunASR 转写后处理。
 - 使用 QQ 邮箱 SMTP 向消息发送者回复。
 - 通过本地网页管理 QCCA 的工作区沙箱权限和发件账号。
+
+### 一条消息的旅程
+
+```text
+QQ / NapCat
+    -> QQ Chat Exporter 实时捕获
+    -> QCCA Agent（文本、语音识别、Codex）
+    -> QQ 邮箱回复
+```
+
+所有服务默认只监听 `127.0.0.1`，数据和授权码保存在本机，适合个人电脑或局域网隔离环境。
+
+## 1.1.0 更新
+
+- 管理页面新增 Agent 实时状态，可查看当前调用的工作区、会话和会话 ID。
+- 管理页面支持按会话读取聊天记录，默认展示最近 200 条。
+- 会话记录按 UUID 独立保存为 JSONL，便于备份和排查。
+- 发行目录与源码使用相同的记录接口和数据路径。
 
 ## 开始使用
 
@@ -55,6 +91,8 @@ QCCA 会监听 QQ Chat Exporter 的 `live-capture` JSONL 文件：
 - 文本消息会交由 Codex Agent 处理。
 - 语音消息会先通过 FunASR 转写成文本，再交由 Codex Agent 处理。
 - 处理结果可通过 QQ 邮箱 SMTP 回复给发送消息的用户。
+- 管理页面会显示 Agent 当前是否正在调用，并在调用时展示目标工作区、会话和会话 ID。
+- 选择工作区与会话后，可以直接查看该会话保存的聊天记录；页面默认展示最近 200 条。
 
 QQ 用户、工作目录和会话由 QCCA 在处理消息时自动写入配置，管理页面不能手动创建或修改它们。可以在管理页面修改已有工作区的沙箱权限、选择发件 QQ，并为各发件 QQ 配置邮箱授权码。
 
@@ -68,6 +106,12 @@ QCCA 的用户、工作区和会话配置文件：
 
 ```text
 %USERPROFILE%\.qq-chat-exporter\qcca\workspace\config.json
+```
+
+会话聊天记录以 JSONL 格式保存，每个会话使用独立的 UUID 文件：
+
+```text
+%USERPROFILE%\.qq-chat-exporter\qcca\record\<session-id>.jsonl
 ```
 
 默认监听目录：
