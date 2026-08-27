@@ -28,6 +28,36 @@ QCCA-NapCat-QCE 把 QQ 登录接入、聊天记录归档和消息自动化串成
 
 上面的资源来自项目现有前端与品牌素材；QCCA 专属图标也会用于发行版入口和托盘菜单。
 
+### 项目视觉导览
+
+<table>
+  <tr>
+    <td align="center"><img src="qcca/qcca-app-icon.png" alt="QCCA 应用图标" width="180"><br><sub>QCCA 管理与 Agent 入口</sub></td>
+    <td align="center"><img src="plugins/napcat-plugin-qce/icon.png" alt="QCE 插件图标" width="180"><br><sub>NapCat 的 QCE 插件</sub></td>
+    <td align="center"><img src="static/qce/device.png" alt="QCE 本地界面" width="180"><br><sub>本地 Web 管理界面</sub></td>
+  </tr>
+</table>
+
+这些图片均来自仓库内的现有资源，不包含用户聊天内容、QQ 号码或邮箱授权码。
+
+### 组件协作
+
+```mermaid
+flowchart LR
+    QQ[QQNT 客户端] --> NC[NapCatQQ]
+    NC --> OB[OneBot HTTP<br/>127.0.0.1:3000]
+    NC --> QCE[QQ Chat Exporter]
+    QCE --> CAP[live-capture JSONL]
+    CAP --> AG[QCCA Agent]
+    AG --> MEM[会话 UUID / JSONL 记录]
+    AG --> API[QCCA FastAPI<br/>127.0.0.1:40655]
+    API --> UI[QCCA 管理页面]
+    AG --> MAIL[QQ Mail SMTP]
+    MAIL --> QQ
+```
+
+每个组件都有清晰边界：NapCat 负责 QQ 接入，QCE 负责记录与浏览，QCCA 负责实时处理、会话记忆和管理 API。默认服务只在本机监听，便于个人部署和排查。
+
 ## 简介
 
 QCCA-NapCat-QCE 将以下组件整合为一个 Windows 使用包：
@@ -47,6 +77,15 @@ QCCA-NapCat-QCE 将以下组件整合为一个 Windows 使用包：
 - 将语音消息通过 FunASR 转写后处理。
 - 使用 QQ 邮箱 SMTP 向消息发送者回复。
 - 通过本地网页管理 QCCA 的工作区沙箱权限和发件账号。
+
+### 你可以用它做什么
+
+| 场景 | 工作方式 | 结果 |
+| --- | --- | --- |
+| 聊天归档 | QCE 持续保存 QQ 消息 | 在 Web 页面搜索和浏览历史记录 |
+| 自动处理 | QCCA 监听实时捕获并调用 Agent | 将文本或转写后的语音交给 Agent |
+| 会话管理 | 每个会话绑定唯一 UUID | 独立查看记录，避免不同会话串线 |
+| 邮件回复 | 选择发件 QQ 并配置 SMTP 授权码 | 处理结果通过 QQ 邮箱返回 |
 
 ### 一条消息的旅程
 
@@ -81,6 +120,14 @@ QQ / NapCat
 3. 在 QQ 客户端完成登录。
 4. 打开 `http://localhost:40653/qce`，按控制台提示输入访问令牌。
 5. 打开 `http://localhost:40653/qce/qcca/` 管理 QCCA 配置。
+
+### 首次运行检查清单
+
+- QQNT 已安装，并能正常启动。
+- 使用发行包时从 `QCCA-NapCat-QCE.exe` 启动；源码运行使用 `launcher-user.bat`。
+- 登录完成后，确认 `http://127.0.0.1:3000`、`http://127.0.0.1:40653/qce` 和 `http://127.0.0.1:40655/health` 可以访问。
+- 需要邮件回复时，在 QCCA 管理页面为发件 QQ 填写授权码。
+- 语音识别首次使用可能需要加载 FunASR 模型，请预留磁盘空间和初始化时间。
 
 发行包首次扫码登录时，启动控制台会保持显示，用于展示二维码和启动状态；检测到 NapCat 返回有效 QQ 号后，`QCCA-NapCat-QCE.exe` 会自动隐藏该控制台。QQ 客户端窗口本身不会隐藏。
 

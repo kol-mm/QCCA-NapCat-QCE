@@ -28,6 +28,36 @@ QCCA-NapCat-QCE connects QQ login, chat archiving, and message automation in one
 
 These images are existing project and frontend assets. The QCCA icon is also used by the release launcher and tray menu.
 
+### Visual tour
+
+<table>
+  <tr>
+    <td align="center"><img src="qcca/qcca-app-icon.png" alt="QCCA application icon" width="180"><br><sub>QCCA and Agent entry point</sub></td>
+    <td align="center"><img src="plugins/napcat-plugin-qce/icon.png" alt="QCE plugin icon" width="180"><br><sub>QCE plugin for NapCat</sub></td>
+    <td align="center"><img src="static/qce/device.png" alt="QCE local interface" width="180"><br><sub>Local web management UI</sub></td>
+  </tr>
+</table>
+
+All images above are existing repository assets. They contain no user chat content, QQ numbers, or mail authorization codes.
+
+### Component collaboration
+
+```mermaid
+flowchart LR
+    QQ[QQNT client] --> NC[NapCatQQ]
+    NC --> OB[OneBot HTTP<br/>127.0.0.1:3000]
+    NC --> QCE[QQ Chat Exporter]
+    QCE --> CAP[live-capture JSONL]
+    CAP --> AG[QCCA Agent]
+    AG --> MEM[UUID / JSONL<br/>session records]
+    AG --> API[QCCA FastAPI<br/>127.0.0.1:40655]
+    API --> UI[QCCA management UI]
+    AG --> MAIL[QQ Mail SMTP]
+    MAIL --> QQ
+```
+
+Each component has a focused boundary: NapCat handles QQ connectivity, QCE handles recording and browsing, and QCCA handles real-time processing, session memory, and the management API. Services bind locally by default, which keeps deployment and troubleshooting straightforward.
+
 ## Overview
 
 | Component | Version / purpose |
@@ -47,6 +77,15 @@ These images are existing project and frontend assets. The QCCA icon is also use
 - Manage workspace sandbox permissions and sender accounts from a local web page.
 - The management page shows whether the Agent is running and displays its target workspace, session, and session ID.
 - Select a workspace and session to view saved chat records; the page displays the latest 200 records.
+
+### What you can do with it
+
+| Scenario | How it works | Outcome |
+| --- | --- | --- |
+| Chat archive | QCE continuously stores QQ messages | Search and browse history in the web UI |
+| Automated handling | QCCA watches live capture and invokes an agent | Process text or transcribed voice messages |
+| Session management | Each session receives a unique UUID | Inspect records without mixing conversations |
+| Mail reply | Select a sender QQ and configure SMTP | Return processed results through QQ Mail |
 
 ### Message flow
 
@@ -81,6 +120,14 @@ This is a Windows x64 local integration bundle, not a hosted bot service. QQ log
 3. Sign in through the QQ client.
 4. Open `http://localhost:40653/qce` and enter the console access token.
 5. Open `http://localhost:40653/qce/qcca/` to manage QCCA.
+
+### First-run checklist
+
+- QQNT is installed and can launch normally.
+- Use `QCCA-NapCat-QCE.exe` for a release package, or `launcher-user.bat` from a source checkout.
+- After login, verify `http://127.0.0.1:3000`, `http://127.0.0.1:40653/qce`, and `http://127.0.0.1:40655/health`.
+- If mail replies are needed, enter an authorization code for the sender QQ in the QCCA management page.
+- The first voice-processing run may load the FunASR model; allow time and disk space for initialization.
 
 In a release package, the launcher console remains visible during the first QR-code login and is hidden automatically after NapCat reports a valid QQ number. The QQ client window itself remains visible.
 
