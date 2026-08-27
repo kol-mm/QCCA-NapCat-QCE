@@ -1,12 +1,10 @@
 # QCCA-NapCat-QCE
 
-> A Windows x64 bundle built on NapCatQQ and QQ Chat Exporter, with QCCA message processing and a local management page.
+> A Windows x64 bundle that combines NapCatQQ, QQ Chat Exporter, and QCCA.
 
 <p align="center">
   <img src="qcca/qcca-app-icon.png" alt="QCCA icon" width="180">
 </p>
-
-<p align="center"><strong>A local, practical bridge from QQ messages to searchable records and automated replies.</strong></p>
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 [![Platform: Windows x64](https://img.shields.io/badge/Platform-Windows%20x64-0078D4.svg)](#requirements)
@@ -16,31 +14,11 @@
 
 ---
 
-## At A Glance
+## Overview
 
-QCCA-NapCat-QCE connects QQ login, chat archiving, and message automation in one Windows package: NapCat receives messages, QQ Chat Exporter stores and displays them, QCCA watches live events and invokes a coding agent, and QQ Mail delivers the response back to the sender.
+This is a Windows x64 bundle containing NapCatQQ, QQ Chat Exporter, and QCCA. NapCatQQ handles QQ login and the OneBot interface, QQ Chat Exporter exports and browses records, and QCCA watches QCE live-capture files before invoking a coding agent. QCCA also exposes a local FastAPI management page.
 
-<p align="center">
-  <img src="static/assets/logo-C2MGgWT2.png" alt="QCE project mark" width="220">
-  &nbsp;&nbsp;&nbsp;
-  <img src="static/qce/device.png" alt="Local web interface device artwork" width="180">
-</p>
-
-These images are existing project and frontend assets. The QCCA icon is also used by the release launcher and tray menu.
-
-### Visual tour
-
-<table>
-  <tr>
-    <td align="center"><img src="qcca/qcca-app-icon.png" alt="QCCA application icon" width="180"><br><sub>QCCA and Agent entry point</sub></td>
-    <td align="center"><img src="plugins/napcat-plugin-qce/icon.png" alt="QCE plugin icon" width="180"><br><sub>QCE plugin for NapCat</sub></td>
-    <td align="center"><img src="static/qce/device.png" alt="QCE local interface" width="180"><br><sub>Local web management UI</sub></td>
-  </tr>
-</table>
-
-All images above are existing repository assets. They contain no user chat content, QQ numbers, or mail authorization codes.
-
-### Component collaboration
+### Data flow
 
 ```mermaid
 flowchart LR
@@ -56,9 +34,7 @@ flowchart LR
     MAIL --> QQ
 ```
 
-Each component has a focused boundary: NapCat handles QQ connectivity, QCE handles recording and browsing, and QCCA handles real-time processing, session memory, and the management API. Services bind locally by default, which keeps deployment and troubleshooting straightforward.
-
-## Overview
+## Components
 
 | Component | Version / purpose |
 | --- | --- |
@@ -74,37 +50,7 @@ Each component has a focused boundary: NapCat handles QQ connectivity, QCE handl
 - Send text messages to a Codex Agent.
 - Transcribe voice messages with FunASR before processing.
 - Reply to message senders through QQ Mail SMTP.
-- Manage workspace sandbox permissions and sender accounts from a local web page.
-- The management page shows whether the Agent is running and displays its target workspace, session, and session ID.
-- Select a workspace and session to view saved chat records; the page displays the latest 200 records.
-
-### What you can do with it
-
-| Scenario | How it works | Outcome |
-| --- | --- | --- |
-| Chat archive | QCE continuously stores QQ messages | Search and browse history in the web UI |
-| Automated handling | QCCA watches live capture and invokes an agent | Process text or transcribed voice messages |
-| Session management | Each session receives a unique UUID | Inspect records without mixing conversations |
-| Mail reply | Select a sender QQ and configure SMTP | Return processed results through QQ Mail |
-
-### Message flow
-
-```text
-QQ / NapCat
-    -> QQ Chat Exporter live capture
-    -> QCCA Agent (text, speech recognition, Codex)
-    -> QQ Mail reply
-```
-
-All services bind to `127.0.0.1` by default. Data and authorization codes remain on the local computer, making the bundle suitable for a personal or isolated LAN setup.
-
-### Good fit for
-
-- Archiving, searching, and browsing QQ chat records on a local computer.
-- Sending selected QQ messages to a coding agent and returning the result through QQ Mail.
-- Running an automated workflow without uploading chat records, workspaces, or mail authorization codes to a hosted service.
-
-This is a Windows x64 local integration bundle, not a hosted bot service. QQ login data, chat records, QCCA configuration, and session JSONL records are owned and managed by the local machine.
+- Manage existing workspace sandbox permissions, session records, and sender QQ accounts from a local web page.
 
 ## What's New In 1.1.0
 

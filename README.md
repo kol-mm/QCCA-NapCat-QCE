@@ -1,12 +1,10 @@
 # QCCA-NapCat-QCE
 
-> 基于 NapCatQQ 与 QQ Chat Exporter 的 Windows x64 整合项目，提供聊天记录导出、QCCA 消息处理和本地管理页面。
+> 基于 NapCatQQ 与 QQ Chat Exporter 的 Windows x64 整合项目。
 
 <p align="center">
   <img src="qcca/qcca-app-icon.png" alt="QCCA 图标" width="180">
 </p>
-
-<p align="center"><strong>让 QQ 消息流转、记录与自动化处理在同一台 Windows 电脑上协同工作。</strong></p>
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 [![Platform: Windows x64](https://img.shields.io/badge/Platform-Windows%20x64-0078D4.svg)](#系统要求)
@@ -16,31 +14,11 @@
 
 ---
 
-## 项目一览
+## 项目简介
 
-QCCA-NapCat-QCE 把 QQ 登录接入、聊天记录归档和消息自动化串成一条清晰的本地链路：NapCat 接收消息，QQ Chat Exporter 保存并展示记录，QCCA 监听实时消息并调用编码 Agent，最终通过 QQ 邮箱把结果送回发送者。
+这是一个 Windows x64 整合包，包含 NapCatQQ、QQ Chat Exporter 和 QCCA。NapCatQQ 负责 QQ 登录及 OneBot 接口，QQ Chat Exporter 负责聊天记录导出和浏览，QCCA 读取 QCE 的实时捕获文件并调用编码 Agent。QCCA 另提供一个本地 FastAPI 管理页面。
 
-<p align="center">
-  <img src="static/assets/logo-C2MGgWT2.png" alt="QCE 项目标志" width="220">
-  &nbsp;&nbsp;&nbsp;
-  <img src="static/qce/device.png" alt="本地 Web 界面设备图" width="180">
-</p>
-
-上面的资源来自项目现有前端与品牌素材；QCCA 专属图标也会用于发行版入口和托盘菜单。
-
-### 项目视觉导览
-
-<table>
-  <tr>
-    <td align="center"><img src="qcca/qcca-app-icon.png" alt="QCCA 应用图标" width="180"><br><sub>QCCA 管理与 Agent 入口</sub></td>
-    <td align="center"><img src="plugins/napcat-plugin-qce/icon.png" alt="QCE 插件图标" width="180"><br><sub>NapCat 的 QCE 插件</sub></td>
-    <td align="center"><img src="static/qce/device.png" alt="QCE 本地界面" width="180"><br><sub>本地 Web 管理界面</sub></td>
-  </tr>
-</table>
-
-这些图片均来自仓库内的现有资源，不包含用户聊天内容、QQ 号码或邮箱授权码。
-
-### 组件协作
+### 数据流
 
 ```mermaid
 flowchart LR
@@ -56,11 +34,7 @@ flowchart LR
     MAIL --> QQ
 ```
 
-每个组件都有清晰边界：NapCat 负责 QQ 接入，QCE 负责记录与浏览，QCCA 负责实时处理、会话记忆和管理 API。默认服务只在本机监听，便于个人部署和排查。
-
-## 简介
-
-QCCA-NapCat-QCE 将以下组件整合为一个 Windows 使用包：
+## 组件
 
 | 组件 | 版本 / 用途 |
 | --- | --- |
@@ -76,35 +50,7 @@ QCCA-NapCat-QCE 将以下组件整合为一个 Windows 使用包：
 - 将文本消息交给 Codex Agent 处理。
 - 将语音消息通过 FunASR 转写后处理。
 - 使用 QQ 邮箱 SMTP 向消息发送者回复。
-- 通过本地网页管理 QCCA 的工作区沙箱权限和发件账号。
-
-### 你可以用它做什么
-
-| 场景 | 工作方式 | 结果 |
-| --- | --- | --- |
-| 聊天归档 | QCE 持续保存 QQ 消息 | 在 Web 页面搜索和浏览历史记录 |
-| 自动处理 | QCCA 监听实时捕获并调用 Agent | 将文本或转写后的语音交给 Agent |
-| 会话管理 | 每个会话绑定唯一 UUID | 独立查看记录，避免不同会话串线 |
-| 邮件回复 | 选择发件 QQ 并配置 SMTP 授权码 | 处理结果通过 QQ 邮箱返回 |
-
-### 一条消息的旅程
-
-```text
-QQ / NapCat
-    -> QQ Chat Exporter 实时捕获
-    -> QCCA Agent（文本、语音识别、Codex）
-    -> QQ 邮箱回复
-```
-
-所有服务默认只监听 `127.0.0.1`，数据和授权码保存在本机，适合个人电脑或局域网隔离环境。
-
-### 适用场景
-
-- 希望在本机归档、搜索和浏览 QQ 聊天记录。
-- 希望将指定 QQ 消息交给编码 Agent 处理，并用 QQ 邮箱返回结果。
-- 希望在不把聊天记录、工作目录或邮箱授权码交给第三方服务的前提下运行自动化流程。
-
-本项目是面向 Windows x64 的本地整合包，不是云端托管机器人服务。QQ 登录、聊天记录、QCCA 配置和会话 JSONL 记录均由使用者的电脑保存和管理。
+- 通过本地网页管理已有工作区的沙箱权限、会话记录和发件 QQ。
 
 ## 1.1.0 更新
 
@@ -116,7 +62,7 @@ QQ / NapCat
 ## 开始使用
 
 1. 将完整包解压至任意目录。
-2. 使用发行包时双击 `QCCA-NapCat-QCE.exe`；从源码目录运行时可执行 `launcher-user.bat`。
+2. 使用发行包时双击 `QCCA-NapCat-QCE.exe`；从源码目录运行 `launcher-user.bat`。
 3. 在 QQ 客户端完成登录。
 4. 打开 `http://localhost:40653/qce`，按控制台提示输入访问令牌。
 5. 打开 `http://localhost:40653/qce/qcca/` 管理 QCCA 配置。
@@ -139,7 +85,7 @@ QQ / NapCat
 
 运行 `start-standalone.bat` 可浏览已经导出的聊天记录，不需要登录 QQ，也不会启动 QCCA。
 
-## QCCA 管理
+## QCCA 配置与管理
 
 QCCA 会监听 QQ Chat Exporter 的 `live-capture` JSONL 文件：
 
@@ -175,7 +121,7 @@ QCCA 的用户、工作区和会话配置文件：
 %USERPROFILE%\Documents\QQChatExporter\live-capture
 ```
 
-启动前可设置 `QCCA_WATCH_DIR` 环境变量以修改监听目录；设置 `QCCA_API_PORT` 可修改 QCCA API 端口。
+启动前可设置 `QCCA_WATCH_DIR` 环境变量修改监听目录；设置 `QCCA_API_PORT` 修改 QCCA API 端口。
 
 ## 本地地址与端口
 
@@ -221,7 +167,7 @@ http://localhost:40653/qce/qcca/?apiPort=端口号
 
 ### 语音识别失败
 
-确认 `ffmpeg` 已安装并已加入系统 `PATH`。QCCA 会使用它将 AMR 转为 WAV 后再交给 FunASR。
+确认 `ffmpeg` 已安装并已加入系统 `PATH`。QCCA 使用它将 AMR 转为 WAV 后再交给 FunASR。
 
 ## 原项目与许可证
 
