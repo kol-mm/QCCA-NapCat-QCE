@@ -59,6 +59,14 @@ QQ / NapCat
 
 All services bind to `127.0.0.1` by default. Data and authorization codes remain on the local computer, making the bundle suitable for a personal or isolated LAN setup.
 
+### Good fit for
+
+- Archiving, searching, and browsing QQ chat records on a local computer.
+- Sending selected QQ messages to a coding agent and returning the result through QQ Mail.
+- Running an automated workflow without uploading chat records, workspaces, or mail authorization codes to a hosted service.
+
+This is a Windows x64 local integration bundle, not a hosted bot service. QQ login data, chat records, QCCA configuration, and session JSONL records are owned and managed by the local machine.
+
 ## What's New In 1.1.0
 
 - The management page now shows live Agent status, including the active workspace, session, and session ID.
