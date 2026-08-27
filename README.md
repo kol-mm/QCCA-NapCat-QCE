@@ -24,7 +24,7 @@ QCCA-NapCat-QCE 将以下组件整合为一个 Windows 使用包：
 ## 功能
 
 - 导出与浏览 QQ 聊天记录。
-- 接收 NapCat 实时消息并写入 QCCA 管理的 `live-capture` JSONL 目录。
+- 监听 QQ Chat Exporter 的 `live-capture` JSONL 消息。
 - 将文本消息交给 Codex Agent 处理。
 - 将语音消息通过 FunASR 转写后处理。
 - 使用 QQ 邮箱 SMTP 向消息发送者回复。
@@ -50,13 +50,11 @@ QCCA-NapCat-QCE 将以下组件整合为一个 Windows 使用包：
 
 ## QCCA 管理
 
-NapCat 插件会优先把实时消息发送到 QCCA API 的 `/qcca/live-capture/ingest`。QCCA 将消息写入并监听自己的 `live-capture` JSONL 目录：
+QCCA 会监听 QQ Chat Exporter 的 `live-capture` JSONL 文件：
 
 - 文本消息会交由 Codex Agent 处理。
 - 语音消息会先通过 FunASR 转写成文本，再交由 Codex Agent 处理。
 - 处理结果可通过 QQ 邮箱 SMTP 回复给发送消息的用户。
-
-如果 QCCA API 尚未启动，NapCat 插件会暂时回退到 QCE 原有的实时捕获接口；QCCA 启动后会接管后续消息。
 
 QQ 用户、工作目录和会话由 QCCA 在处理消息时自动写入配置，管理页面不能手动创建或修改它们。可以在管理页面修改已有工作区的沙箱权限、选择发件 QQ，并为各发件 QQ 配置邮箱授权码。
 
@@ -87,7 +85,7 @@ QCCA 的用户、工作区和会话配置文件：
 | `127.0.0.1:3000` | NapCat OneBot HTTP API，QCCA 用于读取登录信息和发送消息 |
 | `127.0.0.1:40653` | QQ Chat Exporter Web 页面与 API |
 | `127.0.0.1:40654` | QQ Chat Exporter 与 NapCat 的桥接服务 |
-| `127.0.0.1:40655` | QCCA FastAPI 管理服务和实时捕获入口，默认端口，可通过 `QCCA_API_PORT` 修改 |
+| `127.0.0.1:40655` | QCCA FastAPI 管理服务，默认端口，可通过 `QCCA_API_PORT` 修改 |
 
 QCCA API 文档的默认地址是 `http://127.0.0.1:40655/docs`。使用自定义端口时，将地址中的 `40655` 替换为所配置的端口；管理页面可通过 `?apiPort=端口` 指向该 API。
 

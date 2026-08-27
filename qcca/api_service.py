@@ -30,7 +30,7 @@ app.add_middleware(
         f"http://localhost:{_qce_web_port}",
     ],
     allow_credentials=False,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_methods=["GET", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type"],
 )
 
@@ -62,12 +62,6 @@ class User(BaseModel):
 class SmtpConfigUpdate(BaseModel):
     sender_qq: str
     auth_code: str
-
-
-class LiveCaptureMessage(BaseModel):
-    """NapCat 传入的实时消息；具体元素由插件归一化。"""
-
-    model_config = {"extra": "allow"}
 
 
 def _config_path() -> Path:
@@ -110,72 +104,6 @@ def _write_users(users: dict) -> None:
             with suppress(OSError):
                 temporary_path.unlink()
         raise HTTPException(status_code=500, detail=f"无法写入 QCCA 配置：{exc}") from exc
-
-
-def _live_capture_dir() -> Path:
-    configured = os.path.expandvars(os.getenv(
-        "QCCA_WATCH_DIR",
-        os.path.expanduser(r"~\Documents\QQChatExporter\live-capture"),
-    ))
-    return Path(configured).expanduser().resolve()
-
-
-@app.post("/qcca/live-capture/ingest")
-def ingest_live_capture(message: LiveCaptureMessage):
-    """接收 NapCat 实时消息并落盘，供 QCCA 自己的监听器处理。"""
-    payload = message.model_dump() if hasattr(message, "model_dump") else message.dict()
-    message_id = str(payload.get("msgId") or payload.get("msgSeq") or "message")
-    elements = payload.get("elements") if isinstance(payload.get("elements"), list) else []
-    content_elements = []
-    text_parts = []
-    media = []
-    for element in elements:
-        if not isinstance(element, dict):
-            continue
-        element_type = element.get("elementType")
-        if element_type == 1:
-            text = str(element.get("textElement", {}).get("content", ""))
-            content_elements.append({"type": "text", "data": {"text": text}})
-            text_parts.append(text)
-        elif element_type == 4:
-            ptt = element.get("pttElement", {})
-            path = ptt.get("filePath") or ptt.get("fileName") or ""
-            content_elements.append({"type": "audio", "data": {"path": path}})
-            media.append({"localPath": path})
-    if not content_elements:
-        content_elements = [{"type": "text", "data": {"text": ""}}]
-    timestamp = int(payload.get("msgTime") or 0) * 1000
-    record = {
-        "message": {
-            "id": message_id,
-            "seq": str(payload.get("msgSeq") or ""),
-            "timestamp": timestamp,
-            "time": timestamp,
-            "sender": {
-                "uid": str(payload.get("senderUid") or ""),
-                "uin": str(payload.get("senderUin") or ""),
-                "name": str(payload.get("sendNickName") or ""),
-            },
-            "type": "group" if payload.get("chatType") == 2 else "private",
-            "content": {
-                "text": "".join(text_parts),
-                "elements": content_elements,
-                "resources": [],
-            },
-            "recalled": False,
-            "system": False,
-        },
-        "media": media,
-    }
-    target_dir = _live_capture_dir() / f"qcca_{message_id}_{os.getpid()}"
-    try:
-        target_dir.mkdir(parents=True, exist_ok=True)
-        target_file = target_dir / f"{message_id}.jsonl"
-        with target_file.open("w", encoding="utf-8", newline="\n") as file:
-            file.write(json.dumps(record, ensure_ascii=False) + "\n")
-    except OSError as exc:
-        raise HTTPException(status_code=500, detail=f"无法写入实时捕获消息：{exc}") from exc
-    return {"status": "accepted", "path": str(target_file)}
 
 
 def _model_to_dict(model: BaseModel) -> dict:
