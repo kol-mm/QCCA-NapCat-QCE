@@ -104,47 +104,6 @@
           </div>
         </section>
 
-        <section class="live-capture-settings" aria-labelledby="liveCaptureTitle">
-          <div class="section-heading">
-            <div>
-              <h2 id="liveCaptureTitle">实时捕获</h2>
-              <p>配置 QQ Chat Exporter 的实时捕获会话和 webhook 推送。</p>
-            </div>
-            <span class="smtp-status" id="liveCaptureStatus">正在读取</span>
-          </div>
-          <div class="live-capture-grid">
-            <label class="switch-field">
-              <span>启用实时捕获</span>
-              <input id="liveCaptureEnabled" type="checkbox">
-            </label>
-            <label class="field">
-              <span>推送地址</span>
-              <input id="liveCaptureWebhookUrl" type="url" placeholder="可选，例如 https://example.com/webhook">
-            </label>
-            <label class="field">
-              <span>鉴权 Token</span>
-              <input id="liveCaptureWebhookToken" type="password" autocomplete="new-password" placeholder="可选">
-            </label>
-          </div>
-          <div class="live-capture-sessions-heading">
-            <div>
-              <strong>捕获会话</strong>
-              <span id="liveCaptureSessionSummary">正在读取</span>
-            </div>
-            <button class="button secondary" id="loadLiveCaptureSessions" type="button">
-              <span data-icon="refresh-cw"></span><span>刷新会话</span>
-            </button>
-          </div>
-          <div class="live-capture-session-list" id="liveCaptureSessionList">
-            <div class="no-sessions">正在加载会话…</div>
-          </div>
-          <div class="live-capture-actions">
-            <button class="button primary" id="saveLiveCaptureButton" type="button">
-              <span data-icon="save"></span><span>保存实时捕获</span>
-            </button>
-          </div>
-        </section>
-
         <div class="empty-state" id="emptyState">
           <span class="empty-icon" data-icon="settings-2"></span>
           <h1>尚未选择 QQ 用户</h1>
