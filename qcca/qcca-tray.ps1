@@ -6,9 +6,14 @@ $rootDirectory = Split-Path -Parent $qccaDirectory
 $port = if ($env:QCCA_API_PORT) { $env:QCCA_API_PORT } else { "40655" }
 $baseUrl = "http://127.0.0.1:$port"
 $stopScript = Join-Path $qccaDirectory "stop-qcca.ps1"
+$iconPath = Join-Path $qccaDirectory "qcca-app-icon.ico"
 
 $notifyIcon = New-Object System.Windows.Forms.NotifyIcon
-$notifyIcon.Icon = [System.Drawing.SystemIcons]::Application
+$notifyIcon.Icon = if (Test-Path -LiteralPath $iconPath) {
+    New-Object System.Drawing.Icon($iconPath)
+} else {
+    [System.Drawing.SystemIcons]::Application
+}
 $notifyIcon.Text = "QCCA - QQ Cloud Control Agent"
 $notifyIcon.Visible = $true
 $menu = New-Object System.Windows.Forms.ContextMenuStrip
