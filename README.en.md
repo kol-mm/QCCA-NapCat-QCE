@@ -22,11 +22,13 @@
 ## Features
 
 - Export and browse QQ chat records.
-- Receive NapCat live messages and write them to QCCA-managed `live-capture` JSONL files.
+- Receive NapCat live messages through QCCA `/qcca/live-capture/ingest` and write QCCA-managed `live-capture` JSONL files.
 - Send text messages to a Codex Agent.
 - Transcribe voice messages with FunASR before processing.
 - Reply to message senders through QQ Mail SMTP.
 - Manage workspace sandbox permissions and sender accounts from a local web page.
+
+If QCCA is not ready yet, the NapCat plugin temporarily falls back to QCE's original capture endpoint so messages are not lost during startup.
 
 ## Quick Start
 
@@ -61,7 +63,7 @@ The default watched directory is `%USERPROFILE%\Documents\QQChatExporter\live-ca
 | `127.0.0.1:3000` | NapCat OneBot HTTP API used by QCCA |
 | `127.0.0.1:40653` | QQ Chat Exporter web page and API |
 | `127.0.0.1:40654` | QQ Chat Exporter and NapCat bridge |
-| `127.0.0.1:40655` | Default QCCA FastAPI management service port |
+| `127.0.0.1:40655` | QCCA FastAPI management service and live-capture endpoint |
 
 ## Requirements
 
