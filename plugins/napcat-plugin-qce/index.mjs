@@ -20,6 +20,7 @@ let pluginLogger = console;
 let ingestReady = false;
 let accessToken = null;
 const INGEST_PORT = Number(process.env.QCE_SERVER_PORT || 40653);
+const QCCA_PORT = Number(process.env.QCCA_API_PORT || 40655);
 
 /**
  * @returns {'shell' | 'framework' | 'unknown'}
@@ -389,6 +390,17 @@ export async function plugin_onmessage(ctx, event) {
 
     // 消息正常上报到 Rust 后端（包括音频元素，QCCA 需要读取 JSONL 中的音频条目）
 
+    const body = JSON.stringify(raw);
+    const qccaResponse = await fetch(`http://127.0.0.1:${QCCA_PORT}/qcca/live-capture/ingest`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body
+    });
+    if (qccaResponse.ok) return;
+
+    // QCCA 尚未启动时回退到原 QCE 实时捕获接口，避免启动阶段丢消息。
     const token = await resolveAccessToken();
     if (!token) return;
     await fetch(`http://127.0.0.1:${INGEST_PORT}/api/live-capture/ingest`, {
@@ -397,7 +409,7 @@ export async function plugin_onmessage(ctx, event) {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${token}`
       },
-      body: JSON.stringify(raw)
+      body
     });
   } catch (error) {
     console.warn('[QCE] live-capture ingest failed:', error?.message || error);

@@ -22,7 +22,7 @@
 ## Features
 
 - Export and browse QQ chat records.
-- Watch QQ Chat Exporter `live-capture` JSONL messages.
+- Receive NapCat live messages and write them to QCCA-managed `live-capture` JSONL files.
 - Send text messages to a Codex Agent.
 - Transcribe voice messages with FunASR before processing.
 - Reply to message senders through QQ Mail SMTP.

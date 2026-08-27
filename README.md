@@ -24,7 +24,7 @@ QCCA-NapCat-QCE 将以下组件整合为一个 Windows 使用包：
 ## 功能
 
 - 导出与浏览 QQ 聊天记录。
-- 监听 QQ Chat Exporter 的 `live-capture` JSONL 消息。
+- 接收 NapCat 实时消息并写入 QCCA 管理的 `live-capture` JSONL 目录。
 - 将文本消息交给 Codex Agent 处理。
 - 将语音消息通过 FunASR 转写后处理。
 - 使用 QQ 邮箱 SMTP 向消息发送者回复。
@@ -50,7 +50,7 @@ QCCA-NapCat-QCE 将以下组件整合为一个 Windows 使用包：
 
 ## QCCA 管理
 
-QCCA 会监听 QQ Chat Exporter 的 `live-capture` JSONL 文件：
+QCCA 会接收 NapCat 插件转发的实时消息，并监听 QCCA 管理的 `live-capture` JSONL 文件：
 
 - 文本消息会交由 Codex Agent 处理。
 - 语音消息会先通过 FunASR 转写成文本，再交由 Codex Agent 处理。
