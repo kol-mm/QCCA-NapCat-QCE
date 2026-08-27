@@ -4,7 +4,7 @@
   var apiPort = new URLSearchParams(location.search).get('apiPort') || '40655';
   if (!/^\d{1,5}$/.test(apiPort) || Number(apiPort) < 1 || Number(apiPort) > 65535) apiPort = '40655';
   var API_BASE = 'http://' + (location.hostname === 'localhost' ? 'localhost' : '127.0.0.1') + ':' + apiPort;
-  var state = { configs: {}, selectedUid: null, draft: null, dirty: false, smtpConfigured: false, smtpSenderQq: '', smtpAccounts: [], smtpLoginQq: '', audioModel: { status: 'unknown', message: '' } };
+  var state = { configs: {}, selectedUid: null, draft: null, dirty: false, smtpConfigured: false, smtpSenderQq: '', smtpAccounts: [], smtpLoginQq: '', audioModel: { status: 'unknown', message: '' }, liveCapture: { enabled: false, sessions: [], webhookUrl: '', webhookToken: '' }, liveCaptureSessions: [], liveCaptureLoading: false };
 
   var icons = {
     'arrow-left': '<path d="m12 19-7-7 7-7"/><path d="M19 12H5"/>',
@@ -53,6 +53,27 @@
     return payload;
   }
 
+  async function requestQce(path, options) {
+    var response;
+    var requestOptions = options || {};
+    var headers = Object.assign({ 'Content-Type': 'application/json' }, requestOptions.headers || {});
+    try {
+      var token = localStorage.getItem('qce_access_token');
+      if (token) {
+        headers.Authorization = 'Bearer ' + token;
+        headers['X-Access-Token'] = token;
+      }
+    } catch (error) {}
+    requestOptions = Object.assign({}, requestOptions, { headers: headers });
+    try { response = await fetch(path, requestOptions); } catch (error) { throw new Error('无法连接 QQ Chat Exporter API'); }
+    var payload = null;
+    try { payload = await response.json(); } catch (error) {}
+    if (!response.ok || !payload || payload.success === false) {
+      throw new Error(payload && payload.error && payload.error.message ? payload.error.message : 'QQ Chat Exporter 请求失败');
+    }
+    return payload && Object.prototype.hasOwnProperty.call(payload, 'data') ? payload.data : payload;
+  }
+
   function setConnection(online, text) {
     byId('connectionDot').className = 'status-dot ' + (online ? 'online' : 'offline');
     byId('connectionText').textContent = text;
@@ -76,6 +97,12 @@
       state.configs = responses[0];
       applySmtpResult(responses[1]);
       state.audioModel = responses[2];
+      try {
+        applyLiveCaptureConfig(await requestQce('/api/config'));
+      } catch (error) {
+        state.liveCapture = { enabled: false, sessions: [], webhookUrl: '', webhookToken: '' };
+        toast('无法读取 QQ Chat Exporter 的实时捕获配置', 'error');
+      }
       setConnection(true, 'API 已连接');
       if (!keepSelection || !state.configs[state.selectedUid]) {
         state.selectedUid = Object.keys(state.configs).sort()[0] || null;
@@ -83,6 +110,7 @@
       state.draft = state.selectedUid ? clone(state.configs[state.selectedUid]) : null;
       state.dirty = false;
       render();
+      loadLiveCaptureSessions();
     } catch (error) {
       setConnection(false, 'API 未连接');
       toast(error.message, 'error');
@@ -94,6 +122,7 @@
     renderSidebar();
     renderAudioModelStatus();
     renderSmtpSettings();
+    renderLiveCapture();
     var hasUser = Boolean(state.selectedUid && state.draft);
     byId('emptyState').hidden = hasUser;
     byId('editor').hidden = !hasUser;
@@ -102,6 +131,106 @@
     if (!hasUser) return;
     byId('userTitle').textContent = state.selectedUid;
     renderEditor();
+  }
+
+  function applyLiveCaptureConfig(config) {
+    var value = config && config.liveCapture ? config.liveCapture : {};
+    state.liveCapture = {
+      enabled: Boolean(value.enabled),
+      sessions: Array.isArray(value.sessions) ? clone(value.sessions) : [],
+      webhookUrl: value.webhookUrl || '',
+      webhookToken: value.webhookToken || ''
+    };
+  }
+
+  function liveCaptureKey(item) { return String(item.chatType || 1) + ':' + String(item.peerUid || ''); }
+
+  function renderLiveCapture() {
+    var config = state.liveCapture || {};
+    byId('liveCaptureEnabled').checked = Boolean(config.enabled);
+    byId('liveCaptureWebhookUrl').value = config.webhookUrl || '';
+    byId('liveCaptureWebhookToken').value = config.webhookToken || '';
+    var selected = new Set((config.sessions || []).map(liveCaptureKey));
+    var list = byId('liveCaptureSessionList');
+    list.replaceChildren();
+    if (state.liveCaptureLoading) {
+      var loading = document.createElement('div');
+      loading.className = 'no-sessions';
+      loading.textContent = '正在加载会话…';
+      list.appendChild(loading);
+    } else if (!state.liveCaptureSessions.length) {
+      var empty = document.createElement('div');
+      empty.className = 'no-sessions';
+      empty.textContent = '暂无可用会话';
+      list.appendChild(empty);
+    } else {
+      state.liveCaptureSessions.forEach(function (item) {
+        var label = document.createElement('label');
+        label.className = 'live-capture-session';
+        var checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.checked = selected.has(liveCaptureKey(item));
+        checkbox.addEventListener('change', function () {
+          var current = state.liveCapture.sessions.filter(function (entry) { return liveCaptureKey(entry) !== liveCaptureKey(item); });
+          if (checkbox.checked) current.push(item);
+          state.liveCapture.sessions = current;
+          renderLiveCaptureSummary();
+        });
+        var name = document.createElement('span');
+        name.textContent = item.name;
+        var uid = document.createElement('small');
+        uid.textContent = item.peerUid;
+        label.appendChild(checkbox);
+        label.appendChild(name);
+        label.appendChild(uid);
+        list.appendChild(label);
+      });
+    }
+    renderLiveCaptureSummary();
+    var status = byId('liveCaptureStatus');
+    status.textContent = config.enabled ? '已启用' : '未启用';
+    status.classList.toggle('configured', Boolean(config.enabled));
+  }
+
+  function renderLiveCaptureSummary() {
+    var count = (state.liveCapture.sessions || []).length;
+    byId('liveCaptureSessionSummary').textContent = count ? ('已选择 ' + count + ' 个会话') : '未选择会话';
+  }
+
+  async function loadLiveCaptureSessions() {
+    state.liveCaptureLoading = true;
+    renderLiveCapture();
+    try {
+      var results = await Promise.all([requestQce('/api/groups?page=1&limit=1000'), requestQce('/api/friends?page=1&limit=1000')]);
+      var groups = Array.isArray(results[0] && results[0].groups) ? results[0].groups : [];
+      var friends = Array.isArray(results[1] && results[1].friends) ? results[1].friends : [];
+      state.liveCaptureSessions = groups.map(function (item) { return { chatType: 2, peerUid: String(item.groupCode || item.groupId || ''), name: item.groupName || item.groupCode || '群聊' }; }).filter(function (item) { return item.peerUid; })
+        .concat(friends.map(function (item) { return { chatType: item.chatType || 1, peerUid: String(item.uid || item.uin || ''), name: item.remark || item.nick || item.uin || '好友' }; }).filter(function (item) { return item.peerUid; }));
+    } catch (error) {
+      state.liveCaptureSessions = [];
+      toast(error.message, 'error');
+    } finally {
+      state.liveCaptureLoading = false;
+      renderLiveCapture();
+    }
+  }
+
+  async function saveLiveCapture() {
+    var button = byId('saveLiveCaptureButton');
+    button.disabled = true;
+    var config = {
+      enabled: byId('liveCaptureEnabled').checked,
+      sessions: state.liveCapture.sessions || [],
+      webhookUrl: byId('liveCaptureWebhookUrl').value.trim() || null,
+      webhookToken: byId('liveCaptureWebhookToken').value.trim() || null
+    };
+    try {
+      var result = await requestQce('/api/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ liveCapture: config }) });
+      applyLiveCaptureConfig(result);
+      renderLiveCapture();
+      toast('实时捕获配置已保存');
+    } catch (error) { toast(error.message, 'error'); }
+    finally { button.disabled = false; }
   }
 
   function renderSmtpSettings() {
@@ -471,6 +600,8 @@
   byId('saveSmtpButton').addEventListener('click', saveSmtpConfig);
   byId('addSmtpButton').addEventListener('click', addSmtpConfig);
   byId('deleteSmtpButton').addEventListener('click', deleteSmtpConfig);
+  byId('loadLiveCaptureSessions').addEventListener('click', loadLiveCaptureSessions);
+  byId('saveLiveCaptureButton').addEventListener('click', saveLiveCapture);
   byId('smtpSenderQq').addEventListener('change', async function () {
     var senderQq = byId('smtpSenderQq').value;
     if (!senderQq || senderQq === state.smtpSenderQq) return;

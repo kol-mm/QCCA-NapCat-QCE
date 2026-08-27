@@ -28,6 +28,8 @@
 - Reply to message senders through QQ Mail SMTP.
 - Manage workspace sandbox permissions and sender accounts from a local web page.
 
+The QCCA management page includes a “Live Capture” section for QCE: enable or disable capture, choose group or friend sessions, and configure the webhook URL and authentication token. These settings are saved to QQ Chat Exporter’s configuration; QCE continues writing messages to the original `live-capture` directory.
+
 ## Quick Start
 
 1. Extract the full package anywhere.
