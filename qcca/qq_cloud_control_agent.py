@@ -7,18 +7,25 @@ import io
 import threading
 import shutil
 import subprocess
+import re
 import pysilk
 import wave
 import os
 
 import config_service
-from codex_service import codex_run
+from agents import AgentRegistry, claude_control, codex_control
 from smtplib_service import send_email
 import requests
 
 LOGIN_INFO_URL = "http://127.0.0.1:3000/get_login_info"
 MAX_SESSION_LIST_LINES = 30
 DEFAULT_WATCH_DIR = os.path.expanduser(r"~\Documents\QQChatExporter\live-capture")
+
+AGENT_REGISTRY = AgentRegistry()
+AGENT_REGISTRY.register(codex_control, "codex")
+AGENT_REGISTRY.register(claude_control, "claude")
+_agent_status_lock = threading.RLock()
+_agent_status_context = {'status': 'not_started', 'message': 'Agent 尚未启动'}
 
 
 def get_current_session_context(uid: str):
@@ -45,6 +52,7 @@ def get_current_session_context(uid: str):
         'workspace': workspace,
         'session': session,
         'session_id': config_service.session_id(sessions.get(session)),
+        'agent': config_service.session_agent(sessions.get(session)),
     }
 
 
@@ -54,8 +62,13 @@ def get_current_session_id(uid: str):
     return context.get('session_id') if context else None
 
 
-def get_target_session_context(uid: str, workspace: str | None, session: str | None):
-    """Resolve the workspace/session that codex_run will use for this request.
+def get_target_session_context(
+    uid: str,
+    workspace: str | None,
+    session: str | None,
+    agent: str | None = None,
+):
+    """Resolve the workspace/session and Agent that will handle this request.
 
     A switch command can target a different workspace or create a new session.
     Resolve that target before invoking Codex so the management page does not
@@ -63,13 +76,25 @@ def get_target_session_context(uid: str, workspace: str | None, session: str | N
     """
     user = config_service.dict_user_exist(uid)
     if not isinstance(user, dict):
-        return {'uid': uid, 'workspace': workspace, 'session': session, 'session_id': None}
+        return {
+            'uid': uid,
+            'workspace': workspace,
+            'session': session,
+            'session_id': None,
+            'agent': agent or 'codex',
+        }
 
     recent = user.get('recent_workspace_and_session', {})
     recent_workspace = next(iter(recent), None) if isinstance(recent, dict) else None
     target_workspace = workspace or recent_workspace
     if not target_workspace:
-        return {'uid': uid, 'workspace': None, 'session': session, 'session_id': None}
+        return {
+            'uid': uid,
+            'workspace': None,
+            'session': session,
+            'session_id': None,
+            'agent': agent or 'codex',
+        }
 
     workspaces = user.get('workspaces', {})
     workspace_data = workspaces.get(target_workspace) if isinstance(workspaces, dict) else None
@@ -84,21 +109,41 @@ def get_target_session_context(uid: str, workspace: str | None, session: str | N
         'workspace': target_workspace,
         'session': target_session,
         'session_id': config_service.session_id(value),
+        'agent': agent or config_service.session_agent(value),
     }
 
 
 def publish_agent_status(status: str, **context) -> None:
     """Publish status without allowing status-file errors to affect Agent work."""
-    try:
-        config_service.update_agent_status(status, **context)
-    except OSError as e:
-        print(f'写入 Agent 状态失败: {e}')
+    with _agent_status_lock:
+        _agent_status_context.clear()
+        _agent_status_context.update({'status': status, **context})
+        try:
+            config_service.update_agent_status(status, **context)
+        except OSError as e:
+            print(f'写入 Agent 状态失败: {e}')
 
 
-def save_chat_record(uid: str, user_content: str, assistant_content: str) -> None:
-    """Save a normal user/agent exchange under the active session UUID."""
+def heartbeat_agent_status() -> None:
+    """Refresh the current status timestamp without changing its context."""
+    with _agent_status_lock:
+        context = dict(_agent_status_context)
+        status = context.pop('status', 'idle')
+        try:
+            config_service.update_agent_status(status, **context)
+        except OSError as e:
+            print(f'写入 Agent 心跳失败: {e}')
+
+
+def save_chat_record(
+    uid: str,
+    user_content: str,
+    assistant_content: str,
+    session_id: str | None = None,
+) -> None:
+    """Save a normal user/agent exchange under the selected session UUID."""
     try:
-        session_id = get_current_session_id(uid)
+        session_id = session_id or get_current_session_id(uid)
         if not session_id:
             print(f'未找到 QQ {uid} 的会话 UUID，跳过聊天记录保存')
             return
@@ -316,6 +361,7 @@ class myFileSystemEventHandler(FileSystemEventHandler):
                         combined_text = ''.join(data_list)
                         command = combined_text.strip().lower()
                         if command == '/help':
+                            available_agents = '、'.join(sorted(AGENT_REGISTRY.agent_dict))
                             send_email(
                                 receive_uid,
                                 send_uid,
@@ -324,9 +370,26 @@ class myFileSystemEventHandler(FileSystemEventHandler):
                                 '/status - 查看当前工作区和会话\n'
                                 '/sessions - 列出已保存的工作区和会话\n'
                                 '/cancel - 仅取消待生效的切换参数，不会结束当前会话\n'
-                                '/workspace="路径" session=会话 sandbox=权限 - 切换工作区和会话\n'
+                                '/agent - 查看当前 Agent 和可用 Agent\n'
+                                '/agent=codex 或 /agent=claude - 下一条消息使用指定 Agent\n'
+                                '/workspace="路径" session=会话 sandbox=权限 agent=Agent - 切换工作区、会话和 Agent\n'
                                 'sandbox 可选：read-only、workspace-write、danger-full-access\n'
+                                f'当前可用 Agent：{available_agents}\n'
                                 '发送切换命令后，再发送一条普通消息即可生效。',
+                            )
+                            return
+                        if command == '/agent':
+                            current = get_current_session_context(send_uid) or {}
+                            pending = self.user_params.get(send_uid, {})
+                            current_agent = pending.get('agent') or current.get('agent') or 'codex'
+                            available_agents = '、'.join(sorted(AGENT_REGISTRY.agent_dict))
+                            suffix = '（待下一条消息生效）' if pending.get('agent') else ''
+                            send_email(
+                                receive_uid,
+                                send_uid,
+                                f'当前 Agent：{current_agent}{suffix}\n'
+                                f'可用 Agent：{available_agents}\n'
+                                '切换方式：/agent=codex 或 /agent=claude',
                             )
                             return
                         if command == '/cancel':
@@ -342,10 +405,14 @@ class myFileSystemEventHandler(FileSystemEventHandler):
                                 workspace, _ = config_service.get_user_recent_session(user)
                                 recent = user.get('recent_workspace_and_session', {})
                                 session = recent.get(workspace) if workspace else None
-                                sandbox = user.get('workspaces', {}).get(workspace, {}).get('sandbox')
+                                workspace_data = user.get('workspaces', {}).get(workspace, {})
+                                sandbox = workspace_data.get('sandbox')
+                                session_data = workspace_data.get('sessions', {}).get(session, {})
+                                agent = config_service.session_agent(session_data)
                                 send_email(receive_uid, send_uid,
                                            f'当前工作区：{workspace or "未设置"}\n'
                                            f'当前会话：{session or "未设置"}\n'
+                                           f'当前 Agent：{agent}\n'
                                            f'沙箱权限：{sandbox or "read-only"}')
                             else:
                                 lines = ['已保存的工作区和会话：']
@@ -353,7 +420,9 @@ class myFileSystemEventHandler(FileSystemEventHandler):
                                     session_items = []
                                     for name, value in data.get('sessions', {}).items():
                                         sid = config_service.session_id(value)
-                                        session_items.append(f'{name}（{sid}）' if sid else str(name))
+                                        agent = config_service.session_agent(value)
+                                        label = f'{name}（{sid}）' if sid else str(name)
+                                        session_items.append(f'{label} [{agent}]')
                                     sessions = ', '.join(session_items)
                                     lines.append(f'- {workspace}: {sessions or "无会话"}')
                                     if len(lines) >= MAX_SESSION_LIST_LINES:
@@ -362,14 +431,38 @@ class myFileSystemEventHandler(FileSystemEventHandler):
                                 send_email(receive_uid, send_uid, '\n'.join(lines))
                             return
                         if config_service.is_sandbox_command(combined_text):
-                            if parse_sandbox_params_dict != {"workspace": None, "sandbox": None, "session": None}:
-                                self.user_params[send_uid] = parse_sandbox_params_dict
+                            if parse_sandbox_params_dict != {
+                                "workspace": None,
+                                "sandbox": None,
+                                "session": None,
+                                "agent": None,
+                            }:
+                                # Merge partial switch commands so /agent and
+                                # /workspace commands can be sent separately.
+                                pending = self.user_params.get(send_uid, {})
+                                pending = {
+                                    key: pending.get(key)
+                                    for key in ("workspace", "sandbox", "session", "agent")
+                                }
+                                for key, value in parse_sandbox_params_dict.items():
+                                    if value is not None:
+                                        pending[key] = value
+                                self.user_params[send_uid] = pending
                                 send_email(receive_uid, send_uid,
-                                           f'读到有效配置,workspace:{parse_sandbox_params_dict["workspace"]},sandbox:{parse_sandbox_params_dict["sandbox"]},session:{parse_sandbox_params_dict["session"]}')
+                                           f'读到有效配置，workspace:{pending["workspace"]},'
+                                           f'sandbox:{pending["sandbox"]},'
+                                           f'session:{pending["session"]},'
+                                           f'agent:{pending["agent"]}')
                                 return
                             else:
+                                if re.search(r'\bagent=', combined_text, re.IGNORECASE):
+                                    send_email(receive_uid, send_uid, 'Agent 无效，可选：codex、claude。')
+                                    return
                                 send_email(receive_uid, send_uid, '未读到有效配置')
                                 return
+                        elif combined_text.strip().startswith('/'):
+                            send_email(receive_uid, send_uid, '未知指令。发送 /help 查看可用命令。')
+                            return
                         else:
                             print('准备调用agent')
                             # 调用agent获取agent输出
@@ -382,36 +475,78 @@ class myFileSystemEventHandler(FileSystemEventHandler):
                                 send_uid,
                                 params.get('workspace'),
                                 params.get('session'),
+                                params.get('agent'),
                             )
+                            agent_name = target.get('agent') or 'codex'
+                            agent_control = AGENT_REGISTRY.get_agent(agent_name)
+                            if agent_control is None:
+                                print(f'未知 Agent 类型 {agent_name}，回退到 codex')
+                                agent_name = 'codex'
+                                agent_control = AGENT_REGISTRY.get_agent(agent_name)
+                            if agent_control is None:
+                                send_email(receive_uid, send_uid, '没有可用的编码 Agent。')
+                                return
                             publish_agent_status(
                                 'running',
                                 uid=send_uid,
                                 workspace=target.get('workspace') or current.get('workspace'),
                                 session=target.get('session') or '待创建',
                                 session_id=target.get('session_id'),
-                                message='正在调用编码 Agent',
+                                agent=agent_name,
+                                message=f'正在调用 {agent_name} Agent',
                             )
                             try:
-                                agent_text = codex_run(
+                                agent_text = agent_control(
                                     send_uid,
                                     combined_text,
                                     params.get('workspace'),
                                     params.get('session'),
                                     params.get('sandbox'),
+                                    agent=agent_name,
                                 )
-                            finally:
-                                finished = get_current_session_context(send_uid) or current
+                            except Exception as exc:
+                                failed = get_current_session_context(send_uid) or current
                                 publish_agent_status(
-                                    'idle',
+                                    'failed',
                                     uid=send_uid,
-                                    workspace=finished.get('workspace'),
-                                    session=finished.get('session'),
-                                    session_id=finished.get('session_id'),
-                                    message='Agent 空闲',
+                                    workspace=failed.get('workspace') or target.get('workspace'),
+                                    session=failed.get('session') or target.get('session'),
+                                    session_id=failed.get('session_id') or target.get('session_id'),
+                                    agent=agent_name,
+                                    message=f'Agent 调用失败：{exc}',
                                 )
+                                print(f'Agent 调用失败：{exc}')
+                                send_email(receive_uid, send_uid, f'Agent 调用失败：{exc}')
+                                return
+                            finished = get_current_session_context(send_uid) or current
+                            finished_agent = finished.get('agent') or agent_name
+                            publish_agent_status(
+                                'idle',
+                                uid=send_uid,
+                                workspace=finished.get('workspace'),
+                                session=finished.get('session'),
+                                session_id=finished.get('session_id'),
+                                agent=finished_agent,
+                                message='Agent 空闲',
+                            )
                             # print(''.join(data_list))
                             print(agent_text)
-                            save_chat_record(send_uid, combined_text, agent_text)
+                            target_matches_finished = (
+                                target.get('workspace') == finished.get('workspace')
+                                and target.get('session') == finished.get('session')
+                            )
+                            record_session_id = target.get('session_id')
+                            if target_matches_finished:
+                                record_session_id = record_session_id or finished.get('session_id')
+                            if record_session_id:
+                                save_chat_record(
+                                    send_uid,
+                                    combined_text,
+                                    agent_text,
+                                    record_session_id,
+                                )
+                            else:
+                                print('目标会话未成功落盘，跳过聊天记录保存')
                             send_email(receive_uid, send_uid, agent_text)
                 except Exception as e:
                     print(f'文件{event.src_path}处理失败:{e}')
@@ -458,12 +593,17 @@ if __name__ == '__main__':
     observer.start()  # 后台线程开始监听
 
     try:
-        heartbeat_at = 0.0
+        audio_heartbeat_at = 0.0
+        agent_heartbeat_at = 0.0
         while True:
             time.sleep(1)
-            if audio_model_ready.is_set() and time.monotonic() - heartbeat_at >= 5:
+            now = time.monotonic()
+            if audio_model_ready.is_set() and now - audio_heartbeat_at >= 5:
                 config_service.update_audio_model_status('ready', '语音识别模型已就绪')
-                heartbeat_at = time.monotonic()
+                audio_heartbeat_at = now
+            if now - agent_heartbeat_at >= 5:
+                heartbeat_agent_status()
+                agent_heartbeat_at = now
     except KeyboardInterrupt:
         # 按下ctrl+c触发
         print("\n准备停止监听")

@@ -19,7 +19,7 @@ import config_service
 app = FastAPI(
     title="QCCA API",
     description="QCCA 配置管理 API",
-    version="1.1.0",
+    version="1.2.0",
     license_info={"name": "GPL-3.0"},
 )
 _qce_web_port = os.getenv("QCE_SERVER_PORT", "40653")
@@ -77,6 +77,10 @@ class Workspace(BaseModel):
 class User(BaseModel):
     workspaces: Dict[str, Workspace]
     recent_workspace_and_session: Dict[str, str]
+
+
+VALID_SANDBOXES = {"read-only", "workspace-write", "danger-full-access"}
+VALID_AGENTS = {"codex", "claude"}
 
 
 class SmtpConfigUpdate(BaseModel):
@@ -250,8 +254,47 @@ def update_qcca_config(uid: int, user: User):
         if set(current_workspaces) != set(updated_workspaces):
             raise HTTPException(status_code=400, detail="工作目录由 QCCA 自动管理，不能修改")
         for workspace_name, current_workspace in current_workspaces.items():
-            if current_workspace.get("sessions", {}) != updated_workspaces[workspace_name].get("sessions", {}):
-                raise HTTPException(status_code=400, detail="会话由 QCCA 自动管理，不能修改")
+            updated_workspace = updated_workspaces.get(workspace_name)
+            if not isinstance(updated_workspace, dict):
+                raise HTTPException(status_code=400, detail="工作区配置格式无效")
+            if updated_workspace.get("sandbox") not in VALID_SANDBOXES:
+                raise HTTPException(status_code=400, detail="沙箱权限值无效")
+            current_sessions = current_workspace.get("sessions", {})
+            updated_sessions = updated_workspace.get("sessions", {})
+            if not isinstance(current_sessions, dict) or not isinstance(updated_sessions, dict):
+                raise HTTPException(status_code=400, detail="会话配置格式无效")
+            if set(current_sessions) != set(updated_sessions):
+                raise HTTPException(status_code=400, detail="会话名称由 QCCA 自动管理，不能修改")
+            # Session names and IDs remain immutable.  Agent type is the only
+            # session field exposed for management-page editing.
+            normalized_sessions = {}
+            for session_name, current_session in current_sessions.items():
+                submitted = updated_sessions[session_name]
+                if not isinstance(current_session, dict) or not isinstance(submitted, dict):
+                    raise HTTPException(status_code=400, detail="会话配置格式无效")
+                if submitted.get("id") != current_session.get("id"):
+                    raise HTTPException(status_code=400, detail="会话 ID 由 QCCA 自动管理，不能修改")
+                agent = submitted.get("agent", current_session.get("agent", "codex"))
+                if not isinstance(agent, str) or agent.lower() not in VALID_AGENTS:
+                    raise HTTPException(status_code=400, detail="Agent 类型无效，可选：codex、claude")
+                normalized_sessions[session_name] = {
+                    **current_session,
+                    "agent": agent.lower(),
+                }
+            updated_workspace["sessions"] = normalized_sessions
+        recent = updated.get("recent_workspace_and_session", {})
+        if len(recent) > 1:
+            raise HTTPException(status_code=400, detail="最近工作区和会话只能有一组")
+        has_sessions = any(
+            bool(workspace.get("sessions"))
+            for workspace in updated_workspaces.values()
+        )
+        if has_sessions and not recent:
+            raise HTTPException(status_code=400, detail="至少选择一个最近会话")
+        for workspace_name, session_name in recent.items():
+            workspace_data = updated_workspaces.get(workspace_name)
+            if workspace_data is None or session_name not in workspace_data.get("sessions", {}):
+                raise HTTPException(status_code=400, detail="最近工作区或会话不存在")
         users[str(uid)] = updated
         _write_users_unlocked(users)
     return True

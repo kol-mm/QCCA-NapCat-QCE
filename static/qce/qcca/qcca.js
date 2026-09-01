@@ -8,7 +8,7 @@
   if (!/^\d{1,5}$/.test(apiPort) || Number(apiPort) < 1 || Number(apiPort) > 65535) apiPort = '40655';
   try { window.localStorage.setItem('qccaApiPort', apiPort); } catch (error) {}
   var API_BASE = 'http://' + (location.hostname === 'localhost' ? 'localhost' : '127.0.0.1') + ':' + apiPort;
-  var state = { configs: {}, selectedUid: null, draft: null, dirty: false, smtpConfigured: false, smtpSenderQq: '', smtpAccounts: [], smtpLoginQq: '', audioModel: { status: 'unknown', message: '' }, agentStatus: { status: 'unknown', message: '' }, chatRecords: null, chatRecordsSessionId: null, chatRecordsLoading: false };
+  var state = { configs: {}, selectedUid: null, draft: null, dirty: false, smtpConfigured: false, smtpSenderQq: '', smtpAccounts: [], smtpLoginQq: '', smtpError: '', audioModel: { status: 'unknown', message: '' }, agentStatus: { status: 'unknown', message: '' }, chatRecords: null, chatRecordsSessionId: null, chatRecordsLoading: false };
 
   var icons = {
     'arrow-left': '<path d="m12 19-7-7 7-7"/><path d="M19 12H5"/>',
@@ -46,10 +46,17 @@
 
   async function request(path, options) {
     var response;
+    var controller = new AbortController();
+    var timeout = window.setTimeout(function () { controller.abort(); }, 10000);
+    var requestOptions = Object.assign({}, options || {}, { signal: controller.signal });
     try {
-      response = await fetch(API_BASE + path, options);
+      response = await fetch(API_BASE + path, requestOptions);
     } catch (error) {
-      throw new Error('无法连接 QCCA API，请确认服务已启动');
+      throw new Error(error && error.name === 'AbortError'
+        ? 'QCCA API 响应超时，请确认服务状态'
+        : '无法连接 QCCA API，请确认服务已启动');
+    } finally {
+      window.clearTimeout(timeout);
     }
     var payload = null;
     try { payload = await response.json(); } catch (error) {}
@@ -74,12 +81,19 @@
   }
 
   async function loadConfigs(keepSelection) {
+    if (keepSelection && state.dirty && !window.confirm('当前修改尚未保存，刷新会丢失这些修改。确定刷新吗？')) return;
     setConnection(false, '正在连接');
     try {
-      // 配置和 SMTP 是页面的核心数据；状态接口缺失时仍允许管理页面打开。
-      var responses = await Promise.all([request('/qcca/configs'), request('/qcca/smtp-config')]);
-      state.configs = responses[0];
-      applySmtpResult(responses[1]);
+      state.configs = await request('/qcca/configs');
+      try {
+        applySmtpResult(await request('/qcca/smtp-config'));
+        state.smtpError = '';
+      } catch (smtpError) {
+        state.smtpError = smtpError.message;
+        state.smtpConfigured = false;
+        state.smtpAccounts = [];
+        state.smtpSenderQq = '';
+      }
       var optional = await Promise.all([
         request('/qcca/audio-model-status').catch(function () { return { status: 'unknown', message: '暂无语音模型状态' }; }),
         request('/qcca/agent-status').catch(function () { return { status: 'unknown', message: '暂无 Agent 状态' }; })
@@ -119,8 +133,9 @@
 
   function renderSmtpSettings() {
     var status = byId('smtpStatus');
-    status.textContent = state.smtpConfigured ? '已配置' : '未配置';
-    status.classList.toggle('configured', state.smtpConfigured);
+    status.textContent = state.smtpError ? '暂不可用' : (state.smtpConfigured ? '已配置' : '未配置');
+    status.className = 'smtp-status' + (state.smtpConfigured && !state.smtpError ? ' configured' : '') + (state.smtpError ? ' unavailable' : '');
+    status.title = state.smtpError || '';
     var senderSelect = byId('smtpSenderQq');
     senderSelect.replaceChildren();
     state.smtpAccounts.forEach(function (account) {
@@ -177,6 +192,7 @@
       running: '正在调用 Agent',
       idle: 'Agent 空闲',
       stopped: 'Agent 已停止',
+      failed: '调用失败',
       unknown: '状态未知'
     };
     var value = current.status || 'unknown';
@@ -184,9 +200,28 @@
     badge.textContent = labels[value] || '状态未知';
     badge.className = 'agent-status ' + value;
     byId('agentStatusDetail').textContent = current.message || '暂无状态说明';
+    byId('agentType').textContent = current.agent || '未调用';
     byId('agentWorkspace').textContent = current.workspace || '未调用';
     byId('agentSession').textContent = current.session || '未调用';
     byId('agentSessionId').textContent = current.session_id || '未调用';
+    syncAgentToSelectedSession(current);
+  }
+
+  function syncAgentToSelectedSession(current) {
+    // Persisted session data is authoritative; only reconcile after a call
+    // finishes, so a transient running status cannot rewrite the UI on error.
+    if (!current || current.status !== 'idle' || !current.uid || !current.workspace || !current.session || !current.agent) return;
+    var user = state.configs[current.uid];
+    var workspace = user && user.workspaces && user.workspaces[current.workspace];
+    var session = workspace && workspace.sessions && workspace.sessions[current.session];
+    if (!session || typeof session !== 'object' || session.agent === current.agent) return;
+    session.agent = current.agent;
+    if (state.selectedUid === current.uid && state.draft && !state.dirty) {
+      var draftWorkspace = state.draft.workspaces && state.draft.workspaces[current.workspace];
+      var draftSession = draftWorkspace && draftWorkspace.sessions && draftWorkspace.sessions[current.session];
+      if (draftSession && typeof draftSession === 'object') draftSession.agent = current.agent;
+      renderWorkspaceList();
+    }
   }
 
   function selectedSession() {
@@ -291,7 +326,8 @@
     var query = byId('userSearch').value.trim();
     var list = byId('userList');
     list.replaceChildren();
-    Object.keys(state.configs).sort().filter(function (uid) { return !query || uid.indexOf(query) !== -1; }).forEach(function (uid) {
+    var users = Object.keys(state.configs).sort();
+    users.filter(function (uid) { return !query || uid.indexOf(query) !== -1; }).forEach(function (uid) {
       var user = state.configs[uid];
       var button = document.createElement('button');
       button.type = 'button';
@@ -303,16 +339,22 @@
       button.addEventListener('click', function () { selectUser(uid); });
       list.appendChild(button);
     });
+    var mobileSelect = byId('mobileUserSelect');
+    mobileSelect.replaceChildren();
+    option(mobileSelect, '', users.length ? '选择 QQ 用户' : '暂无 QQ 用户');
+    users.forEach(function (uid) { option(mobileSelect, uid, uid); });
+    mobileSelect.value = state.selectedUid || '';
   }
 
   function selectUser(uid) {
-    if (uid === state.selectedUid) return;
-    if (state.dirty && !window.confirm('当前修改尚未保存，确定切换用户吗？')) return;
+    if (uid === state.selectedUid) return true;
+    if (state.dirty && !window.confirm('当前修改尚未保存，确定切换用户吗？')) return false;
     state.selectedUid = uid;
     state.draft = clone(state.configs[uid]);
     state.dirty = false;
     render();
     loadSessionRecords();
+    return true;
   }
 
   function setDirty() {
@@ -403,14 +445,18 @@
       var sessionName = entry[0];
       var row = document.createElement('div');
       row.className = 'session-row';
-      row.innerHTML = '<input class="session-name" aria-label="会话名称" readonly><input class="session-resume" aria-label="Codex 会话 ID" readonly>';
+      row.innerHTML = '<input class="session-name" aria-label="会话名称" readonly><select class="session-agent" aria-label="Agent 类型"><option value="codex">Codex</option><option value="claude">Claude</option></select><input class="session-id" aria-label="会话 ID" readonly>';
       var nameInput = row.querySelector('.session-name');
-      var resumeInput = row.querySelector('.session-resume');
+      var agentInput = row.querySelector('.session-agent');
+      var idInput = row.querySelector('.session-id');
       nameInput.value = sessionName;
       var session = entry[1];
-      resumeInput.value = session && typeof session === 'object'
-        ? ((session.id || '') + (session.resume ? ' · resume: ' + session.resume : ''))
-        : (session || '');
+      agentInput.value = session && typeof session === 'object' ? (session.agent || 'codex') : 'codex';
+      idInput.value = session && typeof session === 'object' ? (session.id || '') : (session || '');
+      agentInput.addEventListener('change', function () {
+        if (session && typeof session === 'object') session.agent = agentInput.value;
+        setDirty();
+      });
       list.appendChild(row);
     });
   }
@@ -528,6 +574,7 @@
         body: JSON.stringify({ sender_qq: senderQq, auth_code: authCode })
       });
       input.value = '';
+      state.smtpError = '';
       applySmtpResult(result);
       renderSmtpSettings();
       toast('授权码已更新');
@@ -561,6 +608,7 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sender_qq: senderQq, auth_code: authCode })
       });
+      state.smtpError = '';
       applySmtpResult(result);
       renderSmtpSettings();
       toast('发件 QQ 已新增并设为当前账号');
@@ -577,6 +625,7 @@
     if (!window.confirm('删除发件 QQ ' + senderQq + ' 及其授权码？')) return;
     try {
       var result = await request('/qcca/smtp-config/' + encodeURIComponent(senderQq), { method: 'DELETE' });
+      state.smtpError = '';
       applySmtpResult(result);
       renderSmtpSettings();
       toast('发件 QQ 已删除');
@@ -601,6 +650,9 @@
   byId('refreshButton').addEventListener('click', function () { loadConfigs(true); });
   byId('refreshRecordsButton').addEventListener('click', function () { loadSessionRecords(true); });
   byId('userSearch').addEventListener('input', renderSidebar);
+  byId('mobileUserSelect').addEventListener('change', function () {
+    if (this.value && !selectUser(this.value)) this.value = state.selectedUid || '';
+  });
   document.querySelectorAll('[data-close-delete]').forEach(function (button) { button.addEventListener('click', closeDeleteModal); });
   byId('deleteUserButton').addEventListener('click', function () { byId('deleteModal').hidden = false; });
   byId('confirmDeleteUser').addEventListener('click', deleteUser);
@@ -613,6 +665,7 @@
     if (!senderQq || senderQq === state.smtpSenderQq) return;
     try {
       var result = await request('/qcca/smtp-config/select/' + encodeURIComponent(senderQq), { method: 'PUT' });
+      state.smtpError = '';
       applySmtpResult(result);
       renderSmtpSettings();
     } catch (error) {

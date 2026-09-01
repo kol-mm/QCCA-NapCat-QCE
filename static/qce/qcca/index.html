@@ -40,12 +40,16 @@
 
       <div class="sidebar-heading"><span>QQ 用户</span></div>
       <nav class="user-list" id="userList" aria-label="QQ 用户列表"></nav>
-      <div class="sidebar-footer" id="apiAddress">API · 127.0.0.1:40655</div>
+      <div class="sidebar-footer" id="apiAddress">API · 正在读取</div>
     </aside>
 
     <main class="main-content">
       <div class="topbar">
         <div class="breadcrumbs"><span>QCE</span><span>/</span><strong>QCCA 管理</strong></div>
+        <label class="mobile-user-picker">
+          <span>QQ 用户</span>
+          <select id="mobileUserSelect" aria-label="选择 QQ 用户"></select>
+        </label>
         <div class="topbar-actions">
           <button class="button danger ghost" id="deleteUserButton" type="button" hidden>
             <span data-icon="trash-2"></span><span>删除用户</span>
@@ -62,7 +66,7 @@
             <h2 id="audioModelTitle">音频识别</h2>
             <p>语音识别模型由 QCCA Agent 在后台加载。</p>
           </div>
-          <span class="model-status" id="audioModelStatus">正在读取</span>
+            <span class="model-status" id="audioModelStatus" aria-live="polite">正在读取</span>
         </section>
 
         <section class="smtp-settings" aria-labelledby="smtpTitle">
@@ -71,7 +75,7 @@
               <h2 id="smtpTitle">邮件回复</h2>
               <p>配置用于回复消息发送者的 QQ 邮箱账号。</p>
             </div>
-            <span class="smtp-status" id="smtpStatus">正在读取</span>
+              <span class="smtp-status" id="smtpStatus" aria-live="polite">正在读取</span>
           </div>
           <div class="smtp-grid">
             <div class="smtp-account-row">
@@ -139,9 +143,10 @@
                 <h2 id="agentMonitorTitle">Agent 状态</h2>
                 <p id="agentStatusDetail">等待状态</p>
               </div>
-              <span class="agent-status" id="agentStatusBadge">正在读取</span>
+              <span class="agent-status" id="agentStatusBadge" aria-live="polite">正在读取</span>
             </div>
             <div class="agent-context">
+              <div><span>Agent</span><strong id="agentType">未调用</strong></div>
               <div><span>工作区</span><strong id="agentWorkspace">未调用</strong></div>
               <div><span>会话</span><strong id="agentSession">未调用</strong></div>
               <div><span>会话 ID</span><strong id="agentSessionId">未调用</strong></div>

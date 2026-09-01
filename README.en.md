@@ -40,24 +40,27 @@ flowchart LR
 | --- | --- |
 | [NapCatQQ](https://github.com/NapNeko/NapCatQQ) | v4.18.19, QQ and OneBot interface |
 | [QQ Chat Exporter](https://github.com/shuakami/qq-chat-exporter) | v5.5.80, export and browse QQ chat records |
-| QCCA | v1.1.0; watches messages, invokes coding agents, and replies through QQ Mail |
+| QCCA | v1.2.0; watches messages, invokes Codex or Claude, and replies through QQ Mail |
 | QCCA API | Local FastAPI management service |
 
 ## Features
 
 - Export and browse QQ chat records.
 - Watch QQ Chat Exporter `live-capture` JSONL messages.
-- Send text messages to a Codex Agent.
+- Select Codex or Claude per session to process text messages.
 - Transcribe voice messages with FunASR before processing.
 - Reply to message senders through QQ Mail SMTP.
-- Manage existing workspace sandbox permissions, session records, and sender QQ accounts from a local web page.
+- Manage the Agent type, sandbox permissions, session records, and sender QQ accounts from a local web page.
 
-## What's New In 1.1.0
+## What's New In 1.2.0
 
-- The management page now shows live Agent status, including the active workspace, session, and session ID.
-- Chat records can be opened by selecting a session; the page displays the latest 200 records.
-- Each session stores its records in a separate UUID-named JSONL file for easier backup and troubleshooting.
-- The source tree and release directories now use the same record endpoints and storage paths.
+- Added Codex / Claude multi-Agent support. Sessions can switch Agent through QQ commands or the management page.
+- Added an Agent registry and isolated adapters so more coding Agents can be integrated without changing the message-processing flow.
+- Sessions now use globally unique UUIDs and store human-Agent conversations in separate JSONL files.
+- QCCA injects the current session's shared memory when invoking an Agent, so switching Agent preserves the QCCA conversation context.
+- The management page shows Agent runtime status, workspace, session, session ID, and the latest 200 chat records.
+- Existing sessions now have an Agent selector while workspace paths, session names, and session IDs remain read-only.
+- Improved `/agent`, `/status`, `/sessions`, and `/cancel` commands and failure-state reporting.
 
 ## Quick Start
 
@@ -72,6 +75,7 @@ flowchart LR
 - QQNT is installed and can launch normally.
 - Use `QCCA-NapCat-QCE.exe` for a release package, or `launcher-user.bat` from a source checkout.
 - After login, verify `http://127.0.0.1:3000`, `http://127.0.0.1:40653/qce`, and `http://127.0.0.1:40655/health`.
+- Before using Codex or Claude, make sure its CLI is installed, authenticated, and able to run independently on the current network.
 - If mail replies are needed, enter an authorization code for the sender QQ in the QCCA management page.
 - The first voice-processing run may load the FunASR model; allow time and disk space for initialization.
 
@@ -83,13 +87,33 @@ Run `start-standalone.bat` to browse already exported records without signing in
 
 ## QCCA Configuration
 
-QCCA automatically creates and maintains QQ users, workspaces, and sessions while it processes messages. The management page can change sandbox permissions for existing workspaces, select the sender QQ, and store the QQ Mail authorization code for each sender.
+QCCA automatically creates and maintains QQ users, workspaces, and sessions while it processes messages. The management page cannot change workspace paths, session names, or session IDs. It can assign Codex or Claude to an existing session, change sandbox permissions, select the sender QQ, and store the QQ Mail authorization code for each sender.
 
 The currently signed-in QQ is reserved automatically as an SMTP sender. SMTP authorization codes are stored in plaintext on this computer. Protect this file carefully:
 
 ```text
 %USERPROFILE%\.qq-chat-exporter\qcca\workspace\smtp.json
 ```
+
+### QQ Commands
+
+Send these commands in QQ to inspect or switch QCCA:
+
+```text
+/help                         Show all commands
+/status                       Show workspace, session, Agent, and sandbox
+/sessions                     List saved sessions
+/agent                        Show the current Agent
+/agent=codex                  Use Codex for the next message
+/agent=claude                 Use Claude for the next message
+/workspace="path" session=name agent=claude sandbox=permission
+                              Set parameters for the next message
+/cancel                       Clear all pending switch parameters
+```
+
+Switch parameters are kept separately for each QQ user and applied together
+when the next normal message invokes an Agent. Multiple switch commands can be
+sent separately; unknown `/` commands are never forwarded as coding tasks.
 
 Session chat records are stored as JSONL, with one UUID-named file per session:
 
@@ -113,7 +137,14 @@ The default watched directory is `%USERPROFILE%\Documents\QQChatExporter\live-ca
 - QQNT installed locally.
 - Python 3.10 or later for QCCA.
 - `ffmpeg` for AMR-to-WAV conversion.
+- At least one supported coding Agent CLI, authenticated locally: Codex CLI or Claude Code.
 - Node.js 18 or later for standalone mode only.
+
+The Windows release does not include the development machine's `.venv`, model cache, or personal configuration. On first launch, QCCA downloads its Python dependencies and reuses that environment on later starts.
+
+### Claude is signed in but requests fail
+
+Run `claude auth status`, then test `claude --print "Hello"` directly. A cached login does not guarantee that the Claude API is reachable. CC Switch is optional; only when you choose to use CC Switch or another proxy must its selected route be running. In every case, verify that Claude Code can return a result before using it through QCCA.
 
 ## Credits and License
 

@@ -188,7 +188,7 @@ if not "!QQPackageJson!"=="" (
 
 rem ============================================================
 rem QCCA - QQ Cloud Control Agent 启动
-rem 使用虚拟环境 venv，国内镜像安装依赖，在新窗口启动 agent
+rem 使用虚拟环境 .venv，国内镜像安装依赖，在新窗口启动 agent
 rem ============================================================
 echo.
 echo ============================================
@@ -196,7 +196,7 @@ echo   QCCA - QQ Cloud Control Agent
 echo ============================================
 
 set "QCCA_DIR=%cd%\qcca"
-set "QCCA_VENV=%QCCA_DIR%\venv"
+set "QCCA_VENV=%QCCA_DIR%\.venv"
 set "QCCA_PYTHON=%QCCA_VENV%\Scripts\python.exe"
 set "QCCA_PYTHONW=%QCCA_VENV%\Scripts\pythonw.exe"
 set "QCCA_LOG_DIR=%QCE_LOG_DIR%"

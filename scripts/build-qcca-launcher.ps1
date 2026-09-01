@@ -11,9 +11,9 @@ $cscPath = @(
     (Join-Path $env:WINDIR "Microsoft.NET\Framework\v4.0.30319\csc.exe")
 ) | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
 
-if (-not $cscPath) { throw "未找到 .NET Framework C# 编译器 csc.exe。" }
-if (-not (Test-Path -LiteralPath $sourcePath)) { throw "找不到启动器源码：$sourcePath" }
-if (-not (Test-Path -LiteralPath $iconPath)) { throw "找不到 QCCA 图标：$iconPath" }
+if (-not $cscPath) { throw ".NET Framework C# compiler csc.exe was not found." }
+if (-not (Test-Path -LiteralPath $sourcePath)) { throw "Launcher source was not found: $sourcePath" }
+if (-not (Test-Path -LiteralPath $iconPath)) { throw "QCCA icon was not found: $iconPath" }
 
 $outputDirectory = Split-Path -Parent $OutputPath
 if ($outputDirectory) { New-Item -ItemType Directory -Path $outputDirectory -Force | Out-Null }
@@ -28,5 +28,5 @@ $arguments = @(
     $sourcePath
 )
 & $cscPath @arguments
-if ($LASTEXITCODE -ne 0) { throw "QCCA 启动器编译失败，退出码：$LASTEXITCODE" }
-Write-Host "QCCA 启动器已生成：$OutputPath"
+if ($LASTEXITCODE -ne 0) { throw "QCCA launcher compilation failed with exit code $LASTEXITCODE." }
+Write-Host "QCCA launcher created: $OutputPath"
