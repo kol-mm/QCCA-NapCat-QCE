@@ -45,6 +45,7 @@ def _sandbox(workspace_data: dict[str, Any], requested: str | None = None) -> st
 def _resolve_target(config_data: dict[str, Any], uid: str, workspace: str | None,
                     session: str | None, sandbox: str | None,
                     requested_agent: str | None = None) -> AgentContext:
+    default_agent = config.get_default_agent()
     user = config_data.get(uid)
     if not user:
         target_workspace = workspace or os.path.expanduser(
@@ -52,7 +53,7 @@ def _resolve_target(config_data: dict[str, Any], uid: str, workspace: str | None
         )
         os.makedirs(target_workspace, exist_ok=True)
         return AgentContext(
-            uid, target_workspace, session or _new_session(), requested_agent or "codex",
+            uid, target_workspace, session or _new_session(), requested_agent or default_agent,
             sandbox or DEFAULT_SANDBOX, "add", True, None
         )
 
@@ -93,9 +94,9 @@ def _resolve_target(config_data: dict[str, Any], uid: str, workspace: str | None
             workspace_data = workspaces[workspace]
             selected_sandbox = _sandbox(workspace_data, sandbox)
             workspace_data["sandbox"] = selected_sandbox
-            return AgentContext(uid, workspace, _new_session(), requested_agent or "codex", selected_sandbox, "add")
+            return AgentContext(uid, workspace, _new_session(), requested_agent or default_agent, selected_sandbox, "add")
 
-        return AgentContext(uid, workspace, _new_session(), requested_agent or "codex", sandbox or DEFAULT_SANDBOX, "add")
+        return AgentContext(uid, workspace, _new_session(), requested_agent or default_agent, sandbox or DEFAULT_SANDBOX, "add")
 
     if workspace == recent_workspace or not workspace:
         if session in recent_data["sessions"]:
@@ -109,7 +110,7 @@ def _resolve_target(config_data: dict[str, Any], uid: str, workspace: str | None
             )
         selected_sandbox = sandbox or recent_sandbox
         recent_data["sandbox"] = selected_sandbox
-        return AgentContext(uid, recent_workspace, session, requested_agent or "codex", selected_sandbox, "add")
+        return AgentContext(uid, recent_workspace, session, requested_agent or default_agent, selected_sandbox, "add")
 
     if workspace in workspaces:
         workspace_data = workspaces[workspace]
@@ -121,10 +122,10 @@ def _resolve_target(config_data: dict[str, Any], uid: str, workspace: str | None
                 uid, workspace, session, requested_agent or agent, selected_sandbox, "update", False,
                 config.session_id(workspace_data["sessions"][session]),
             )
-        return AgentContext(uid, workspace, session, requested_agent or "codex", selected_sandbox, "add")
+        return AgentContext(uid, workspace, session, requested_agent or default_agent, selected_sandbox, "add")
 
     return AgentContext(
-        uid, workspace, session or _new_session(), requested_agent or "codex",
+        uid, workspace, session or _new_session(), requested_agent or default_agent,
         sandbox or DEFAULT_SANDBOX, "add"
     )
 

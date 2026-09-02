@@ -74,6 +74,7 @@ def get_target_session_context(
     Resolve that target before invoking Codex so the management page does not
     briefly display the previous session as active.
     """
+    default_agent = config_service.get_default_agent()
     user = config_service.dict_user_exist(uid)
     if not isinstance(user, dict):
         return {
@@ -81,7 +82,7 @@ def get_target_session_context(
             'workspace': workspace,
             'session': session,
             'session_id': None,
-            'agent': agent or 'codex',
+            'agent': agent or default_agent,
         }
 
     recent = user.get('recent_workspace_and_session', {})
@@ -93,7 +94,7 @@ def get_target_session_context(
             'workspace': None,
             'session': session,
             'session_id': None,
-            'agent': agent or 'codex',
+            'agent': agent or default_agent,
         }
 
     workspaces = user.get('workspaces', {})
@@ -109,7 +110,7 @@ def get_target_session_context(
         'workspace': target_workspace,
         'session': target_session,
         'session_id': config_service.session_id(value),
-        'agent': agent or config_service.session_agent(value),
+        'agent': agent or (config_service.session_agent(value) if value is not None else default_agent),
     }
 
 

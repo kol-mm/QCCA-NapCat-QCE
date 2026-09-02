@@ -8,7 +8,7 @@
   if (!/^\d{1,5}$/.test(apiPort) || Number(apiPort) < 1 || Number(apiPort) > 65535) apiPort = '40655';
   try { window.localStorage.setItem('qccaApiPort', apiPort); } catch (error) {}
   var API_BASE = 'http://' + (location.hostname === 'localhost' ? 'localhost' : '127.0.0.1') + ':' + apiPort;
-  var state = { configs: {}, selectedUid: null, draft: null, dirty: false, smtpConfigured: false, smtpSenderQq: '', smtpAccounts: [], smtpLoginQq: '', smtpError: '', audioModel: { status: 'unknown', message: '' }, agentStatus: { status: 'unknown', message: '' }, chatRecords: null, chatRecordsSessionId: null, chatRecordsLoading: false };
+  var state = { configs: {}, selectedUid: null, draft: null, dirty: false, smtpConfigured: false, smtpSenderQq: '', smtpAccounts: [], smtpLoginQq: '', smtpError: '', audioModel: { status: 'unknown', message: '' }, agentStatus: { status: 'unknown', message: '' }, systemHealth: null, setup: { setup_completed: true, default_agent: 'codex', login_qq: '', agents: [] }, wizardStep: 1, setupPrompted: false, chatRecords: null, chatRecordsSessionId: null, chatRecordsLoading: false };
 
   var icons = {
     'arrow-left': '<path d="m12 19-7-7 7-7"/><path d="M19 12H5"/>',
@@ -18,6 +18,7 @@
     'settings-2': '<path d="M20 7h-9"/><path d="M14 17H5"/><circle cx="17" cy="17" r="3"/><circle cx="7" cy="7" r="3"/>',
     'trash-2': '<path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v5M14 11v5"/>',
     save: '<path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2Z"/><path d="M17 21v-8H7v8M7 3v5h8"/>',
+    'sliders-horizontal': '<line x1="21" x2="14" y1="4" y2="4"/><line x1="10" x2="3" y1="4" y2="4"/><line x1="21" x2="12" y1="12" y2="12"/><line x1="8" x2="3" y1="12" y2="12"/><line x1="21" x2="16" y1="20" y2="20"/><line x1="12" x2="3" y1="20" y2="20"/><line x1="14" x2="14" y1="2" y2="6"/><line x1="8" x2="8" y1="10" y2="14"/><line x1="16" x2="16" y1="18" y2="22"/>',
     x: '<path d="M18 6 6 18M6 6l12 12"/>',
     check: '<path d="m20 6-11 11-5-5"/>',
     alert: '<circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/>'
@@ -80,6 +81,149 @@
     setTimeout(function () { item.remove(); }, 3200);
   }
 
+  function serviceIcon(status) {
+    return status === 'ready' ? 'check' : 'alert';
+  }
+
+  function renderSystemHealth() {
+    var health = state.systemHealth;
+    var list = byId('serviceStatusList');
+    var badge = byId('systemStatusBadge');
+    list.replaceChildren();
+    if (!health || !Array.isArray(health.services)) {
+      badge.textContent = '无法检查';
+      badge.className = 'system-status-badge error';
+      byId('systemStatusSummary').textContent = 'QCCA API 暂时没有返回运行状态';
+      return;
+    }
+    var labels = { ready: '全部就绪', attention: '需要处理', error: '存在故障' };
+    badge.textContent = labels[health.overall] || '状态未知';
+    badge.className = 'system-status-badge ' + (health.overall || 'attention');
+    var readyCount = health.services.filter(function (item) { return item.status === 'ready'; }).length;
+    byId('systemStatusSummary').textContent = readyCount + ' / ' + health.services.length + ' 项正常';
+    health.services.forEach(function (service) {
+      var row = document.createElement('div');
+      row.className = 'service-status-row ' + (service.status || 'waiting');
+      var indicator = document.createElement('span');
+      indicator.className = 'service-indicator';
+      indicator.innerHTML = iconSvg(serviceIcon(service.status));
+      var copy = document.createElement('div');
+      copy.className = 'service-status-copy';
+      var heading = document.createElement('div');
+      heading.className = 'service-status-heading';
+      var name = document.createElement('strong');
+      name.textContent = service.name || service.id;
+      var statusLabel = document.createElement('span');
+      statusLabel.textContent = service.status === 'ready' ? '正常' : (service.status === 'error' ? '故障' : (service.status === 'warning' ? '可选' : '等待中'));
+      heading.append(name, statusLabel);
+      var summary = document.createElement('p');
+      summary.textContent = service.summary || '';
+      copy.append(heading, summary);
+      if (service.action) {
+        var action = document.createElement('p');
+        action.className = 'action';
+        action.textContent = service.action;
+        copy.appendChild(action);
+      }
+      row.append(indicator, copy);
+      list.appendChild(row);
+    });
+  }
+
+  async function loadSystemStatus() {
+    try {
+      state.systemHealth = await request('/qcca/system-status');
+      renderSystemHealth();
+      if (!byId('setupWizard').hidden) renderSetupWizard();
+    } catch (error) {
+      state.systemHealth = null;
+      renderSystemHealth();
+    }
+  }
+
+  function setupAgentInstalled(name) {
+    var item = (state.setup.agents || []).find(function (agent) { return agent.name === name; });
+    return Boolean(item && item.installed);
+  }
+
+  function openSetupWizard() {
+    state.wizardStep = 1;
+    byId('setupWizard').hidden = false;
+    renderSetupWizard();
+  }
+
+  function closeSetupWizard() {
+    byId('setupWizard').hidden = true;
+    byId('wizardAuthCode').value = '';
+  }
+
+  function renderSetupWizard() {
+    document.querySelectorAll('[data-wizard-step]').forEach(function (item) {
+      var step = Number(item.dataset.wizardStep);
+      item.className = step === state.wizardStep ? 'active' : (step < state.wizardStep ? 'done' : '');
+    });
+    document.querySelectorAll('[data-wizard-pane]').forEach(function (pane) {
+      pane.hidden = Number(pane.dataset.wizardPane) !== state.wizardStep;
+    });
+    byId('wizardBackButton').hidden = state.wizardStep === 1;
+    byId('wizardNextButton').hidden = state.wizardStep === 3;
+    byId('wizardFinishButton').hidden = state.wizardStep !== 3;
+
+    var checks = byId('wizardCheckList');
+    checks.replaceChildren();
+    var wanted = ['napcat', 'qce', 'qcca-api', 'python', 'ffmpeg'];
+    var services = state.systemHealth && Array.isArray(state.systemHealth.services) ? state.systemHealth.services : [];
+    services.filter(function (service) { return wanted.includes(service.id); }).forEach(function (service) {
+      var row = document.createElement('div');
+      row.className = 'wizard-check-row ' + service.status;
+      var indicator = document.createElement('span');
+      indicator.className = 'service-indicator';
+      indicator.innerHTML = iconSvg(serviceIcon(service.status));
+      var name = document.createElement('strong');
+      name.textContent = service.name;
+      var summary = document.createElement('span');
+      summary.textContent = service.summary;
+      row.append(indicator, name, summary);
+      checks.appendChild(row);
+    });
+    if (!checks.children.length) {
+      var waiting = document.createElement('div');
+      waiting.className = 'wizard-check-row waiting';
+      waiting.textContent = '正在读取运行环境';
+      checks.appendChild(waiting);
+    }
+
+    var selectedAgent = state.setup.default_agent || 'codex';
+    var selectedInput = document.querySelector('input[name="wizardAgent"][value="' + selectedAgent + '"]');
+    if (selectedInput) selectedInput.checked = true;
+    byId('wizardCodexState').textContent = setupAgentInstalled('codex') ? '已检测到 Codex CLI' : '未检测到 Codex CLI';
+    byId('wizardClaudeState').textContent = setupAgentInstalled('claude') ? '已检测到 Claude CLI' : '未检测到 Claude CLI';
+    byId('wizardLoginQq').value = state.setup.login_qq || '';
+  }
+
+  async function finishSetup() {
+    var selected = document.querySelector('input[name="wizardAgent"]:checked');
+    var defaultAgent = selected ? selected.value : 'codex';
+    var authCode = byId('wizardAuthCode').value.trim();
+    var button = byId('wizardFinishButton');
+    button.disabled = true;
+    try {
+      var result = await request('/qcca/setup', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ default_agent: defaultAgent, auth_code: authCode })
+      });
+      state.setup = Object.assign({}, state.setup, result, { setup_completed: true, default_agent: defaultAgent });
+      closeSetupWizard();
+      await loadConfigs(false);
+      toast('首次配置已完成');
+    } catch (error) {
+      toast(error.message, 'error');
+    } finally {
+      button.disabled = false;
+    }
+  }
+
   async function loadConfigs(keepSelection) {
     if (keepSelection && state.dirty && !window.confirm('当前修改尚未保存，刷新会丢失这些修改。确定刷新吗？')) return;
     setConnection(false, '正在连接');
@@ -96,10 +240,14 @@
       }
       var optional = await Promise.all([
         request('/qcca/audio-model-status').catch(function () { return { status: 'unknown', message: '暂无语音模型状态' }; }),
-        request('/qcca/agent-status').catch(function () { return { status: 'unknown', message: '暂无 Agent 状态' }; })
+        request('/qcca/agent-status').catch(function () { return { status: 'unknown', message: '暂无 Agent 状态' }; }),
+        request('/qcca/system-status').catch(function () { return null; }),
+        request('/qcca/setup').catch(function () { return null; })
       ]);
       state.audioModel = optional[0];
       state.agentStatus = optional[1];
+      state.systemHealth = optional[2];
+      if (optional[3]) state.setup = optional[3];
       setConnection(true, 'API 已连接');
       if (!keepSelection || !state.configs[state.selectedUid]) {
         state.selectedUid = Object.keys(state.configs).sort()[0] || null;
@@ -108,6 +256,10 @@
       state.dirty = false;
       render();
       loadSessionRecords();
+      if (!state.setup.setup_completed && !state.setupPrompted) {
+        state.setupPrompted = true;
+        openSetupWizard();
+      }
     } catch (error) {
       setConnection(false, 'API 未连接');
       toast(error.message, 'error');
@@ -117,6 +269,7 @@
 
   function render() {
     renderSidebar();
+    renderSystemHealth();
     renderAudioModelStatus();
     renderAgentStatus();
     renderChatRecords();
@@ -648,6 +801,21 @@
   }
 
   byId('refreshButton').addEventListener('click', function () { loadConfigs(true); });
+  byId('refreshStatusButton').addEventListener('click', loadSystemStatus);
+  byId('setupButton').addEventListener('click', openSetupWizard);
+  byId('closeSetupWizard').addEventListener('click', closeSetupWizard);
+  byId('wizardBackButton').addEventListener('click', function () {
+    state.wizardStep = Math.max(1, state.wizardStep - 1);
+    renderSetupWizard();
+  });
+  byId('wizardNextButton').addEventListener('click', function () {
+    state.wizardStep = Math.min(3, state.wizardStep + 1);
+    renderSetupWizard();
+  });
+  byId('wizardFinishButton').addEventListener('click', finishSetup);
+  document.querySelectorAll('input[name="wizardAgent"]').forEach(function (input) {
+    input.addEventListener('change', function () { state.setup.default_agent = input.value; });
+  });
   byId('refreshRecordsButton').addEventListener('click', function () { loadSessionRecords(true); });
   byId('userSearch').addEventListener('input', renderSidebar);
   byId('mobileUserSelect').addEventListener('change', function () {
@@ -691,6 +859,7 @@
   renderIcons();
   byId('apiAddress').textContent = 'API · ' + API_BASE.replace(/^https?:\/\//, '');
   loadConfigs(false);
+  window.setInterval(loadSystemStatus, 5000);
   window.setInterval(loadAudioModelStatus, 5000);
   window.setInterval(loadAgentStatus, 2000);
   window.setInterval(function () { if (state.selectedUid) loadSessionRecords(true); }, 5000);

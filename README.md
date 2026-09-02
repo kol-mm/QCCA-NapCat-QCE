@@ -40,7 +40,7 @@ flowchart LR
 | --- | --- |
 | NapCat | v4.18.19，提供 QQ 与 OneBot 接口 |
 | QQ Chat Exporter | v5.5.80，导出并浏览 QQ 聊天记录 |
-| QCCA | v1.2.0，处理 live-capture 消息、调用 Codex / Claude，并通过 QQ 邮箱回复 |
+| QCCA | v1.2.1，处理 live-capture 消息、调用 Codex / Claude，并通过 QQ 邮箱回复 |
 | QCCA API | 基于 FastAPI 的本地管理服务 |
 
 ## 功能
@@ -51,8 +51,9 @@ flowchart LR
 - 将语音消息通过 FunASR 转写后处理。
 - 使用 QQ 邮箱 SMTP 向消息发送者回复。
 - 通过本地网页管理已有工作区的 Agent 类型、沙箱权限、会话记录和发件 QQ。
+- 首次启动提供配置向导，并集中显示 NapCat、QCE、QCCA、Agent、音频模型和 SMTP 状态。
 
-## 1.2.0 更新
+## 1.2.1 更新
 
 - 新增 Codex / Claude 多 Agent 支持，可通过 QQ 指令或管理页面为会话切换 Agent。
 - 引入 Agent 注册表与独立适配器目录，后续接入其他编码 Agent 时不必修改消息处理主流程。
@@ -61,6 +62,8 @@ flowchart LR
 - 管理页面可查看 Agent 运行状态、工作区、会话、会话 ID 和最近 200 条聊天记录。
 - 管理页面新增会话 Agent 下拉框，同时保持工作目录、会话名称和会话 ID 只读。
 - 优化 `/agent`、`/status`、`/sessions`、`/cancel` 等 QQ 指令与失败状态反馈。
+- 管理页新增首次配置向导：检查运行环境、选择新会话默认 Agent，并可配置当前登录 QQ 的邮箱授权码。
+- 管理页新增统一运行状态总览，服务未启动时显示可直接执行的处理建议。
 
 ## 开始使用
 
@@ -76,6 +79,7 @@ flowchart LR
 - 使用发行包时从 `QCCA-NapCat-QCE.exe` 启动；源码运行使用 `launcher-user.bat`。
 - 登录完成后，确认 `http://127.0.0.1:3000`、`http://127.0.0.1:40653/qce` 和 `http://127.0.0.1:40655/health` 可以访问。
 - 使用 Codex 或 Claude 前，确认对应 CLI 已安装、完成登录，并能在当前网络环境中独立执行。
+- 第一次打开 QCCA 管理页会出现配置向导；以后可通过页面顶部的“启动向导”再次打开。
 - 需要邮件回复时，在 QCCA 管理页面为发件 QQ 填写授权码。
 - 语音识别首次使用可能需要加载 FunASR 模型，请预留磁盘空间和初始化时间。
 

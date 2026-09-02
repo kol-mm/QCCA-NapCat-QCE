@@ -11,6 +11,9 @@ from datetime import datetime
 _smtp_lock = RLock()
 _user_config_lock = RLock()
 _memory_lock = RLock()
+_preferences_lock = RLock()
+
+VALID_AGENTS = {"codex", "claude"}
 
 
 @contextmanager
@@ -56,6 +59,10 @@ def user_config_file_lock():
 
 class SmtpConfigError(RuntimeError):
     """SMTP 配置无法安全读取时抛出，防止后续写入覆盖原文件。"""
+
+
+class PreferencesConfigError(RuntimeError):
+    """QCCA 偏好配置损坏或无法读取。"""
 
 
 def parse_sandbox_params(text: str) -> dict[str, str | None]:
@@ -181,6 +188,80 @@ def config_dir_file():
         with open(config_file, 'w', encoding='utf-8') as f:
             json.dump({}, f, ensure_ascii=False, indent=2)
     return config_file
+
+
+def preferences_file() -> str:
+    """Return the local setup and default-Agent preferences path."""
+    return os.path.join(os.path.dirname(config_dir_file()), "preferences.json")
+
+
+def get_preferences() -> dict:
+    """Read setup preferences without forcing existing users through the wizard."""
+    defaults = {"setup_completed": False, "default_agent": "codex"}
+    path = preferences_file()
+    try:
+        with _preferences_lock, open(path, "r", encoding="utf-8") as file:
+            data = json.load(file)
+    except FileNotFoundError:
+        try:
+            with open(config_dir_file(), "r", encoding="utf-8") as file:
+                users = json.load(file)
+            defaults["setup_completed"] = isinstance(users, dict) and bool(users)
+        except (OSError, json.JSONDecodeError):
+            pass
+        return defaults
+    except json.JSONDecodeError as exc:
+        raise PreferencesConfigError("QCCA 偏好配置格式无效，请修复 preferences.json") from exc
+    except OSError as exc:
+        raise PreferencesConfigError(f"无法读取 QCCA 偏好配置：{exc}") from exc
+
+    if not isinstance(data, dict):
+        raise PreferencesConfigError("QCCA 偏好配置根节点必须是 JSON 对象")
+    agent = data.get("default_agent", "codex")
+    if not isinstance(agent, str) or agent.lower() not in VALID_AGENTS:
+        agent = "codex"
+    return {
+        "setup_completed": data.get("setup_completed") is True,
+        "default_agent": agent.lower(),
+    }
+
+
+def save_preferences(default_agent: str, setup_completed: bool = True) -> dict:
+    """Atomically store setup completion and the Agent used by new sessions."""
+    agent = default_agent.strip().lower() if isinstance(default_agent, str) else ""
+    if agent not in VALID_AGENTS:
+        raise ValueError("默认 Agent 无效，可选：codex、claude")
+    path = preferences_file()
+    payload = {
+        "setup_completed": bool(setup_completed),
+        "default_agent": agent,
+        "updated_at": time.time(),
+    }
+    with _preferences_lock:
+        fd, temporary_path = tempfile.mkstemp(
+            prefix=".preferences.", suffix=".tmp", dir=os.path.dirname(path)
+        )
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as file:
+                json.dump(payload, file, ensure_ascii=False, indent=2)
+                file.flush()
+                os.fsync(file.fileno())
+            os.replace(temporary_path, path)
+        except OSError:
+            try:
+                os.unlink(temporary_path)
+            except OSError:
+                pass
+            raise
+    return {"setup_completed": payload["setup_completed"], "default_agent": agent}
+
+
+def get_default_agent() -> str:
+    """Return the preferred Agent for newly created sessions."""
+    try:
+        return get_preferences()["default_agent"]
+    except PreferencesConfigError:
+        return "codex"
 
 
 def write_user_config(config_path: str, config: dict) -> None:

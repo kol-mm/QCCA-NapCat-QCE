@@ -1,6 +1,10 @@
 import json
 import os
+import shutil
+import socket
+import sys
 import tempfile
+import time
 from contextlib import suppress
 from json import JSONDecodeError
 from pathlib import Path
@@ -19,7 +23,7 @@ import config_service
 app = FastAPI(
     title="QCCA API",
     description="QCCA 配置管理 API",
-    version="1.2.0",
+    version="1.2.1",
     license_info={"name": "GPL-3.0"},
 )
 _qce_web_port = os.getenv("QCE_SERVER_PORT", "40653")
@@ -86,6 +90,11 @@ VALID_AGENTS = {"codex", "claude"}
 class SmtpConfigUpdate(BaseModel):
     sender_qq: str
     auth_code: str
+
+
+class SetupConfigUpdate(BaseModel):
+    default_agent: str = "codex"
+    auth_code: str = ""
 
 
 def _config_path() -> Path:
@@ -178,6 +187,161 @@ def _smtp_response() -> dict:
             {"qq": qq, "configured": bool(accounts[qq].get("auth_code"))}
             for qq in ordered_qqs
         ],
+    }
+
+
+def _port_is_open(port: int) -> bool:
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=0.8):
+            return True
+    except OSError:
+        return False
+
+
+def _service(service_id: str, name: str, status: str, summary: str,
+             action: str = "", required: bool = True) -> dict:
+    return {
+        "id": service_id,
+        "name": name,
+        "status": status,
+        "summary": summary,
+        "action": action,
+        "required": required,
+    }
+
+
+def _system_status() -> dict:
+    try:
+        preferences = config_service.get_preferences()
+    except config_service.PreferencesConfigError:
+        preferences = {"setup_completed": False, "default_agent": "codex"}
+    default_agent = preferences["default_agent"]
+    login_qq = _get_current_login_qq()
+    napcat_open = _port_is_open(3000)
+    try:
+        qce_port = int(_qce_web_port)
+    except ValueError:
+        qce_port = 40653
+
+    services = []
+    if login_qq:
+        services.append(_service("napcat", "QQ 与 NapCat", "ready", f"QQ {login_qq} 已登录"))
+    elif napcat_open:
+        services.append(_service("napcat", "QQ 与 NapCat", "waiting", "服务已启动，等待 QQ 登录", "请完成扫码或快速登录"))
+    else:
+        services.append(_service("napcat", "QQ 与 NapCat", "error", "尚未连接到 QQ", "请从 QCCA 启动器启动并登录 QQ"))
+
+    if _port_is_open(qce_port):
+        services.append(_service("qce", "QQ Chat Exporter", "ready", "聊天数据服务运行正常"))
+    else:
+        services.append(_service("qce", "QQ Chat Exporter", "error", "聊天数据服务未启动", "请重新启动完整程序"))
+    services.append(_service("qcca-api", "QCCA 管理服务", "ready", "管理接口运行正常"))
+
+    agent_status = config_service.get_agent_status()
+    agent_value = agent_status.get("status", "unknown")
+    active_agent = agent_status.get("agent") or default_agent
+    agent_cli = shutil.which(active_agent)
+    if not agent_cli:
+        services.append(_service("agent", "AI Agent", "error", f"未找到 {active_agent} 命令", f"请安装并登录 {active_agent}"))
+    elif agent_value in {"idle", "running"}:
+        summary = f"{active_agent} 正在处理任务" if agent_value == "running" else f"{active_agent} 已就绪"
+        services.append(_service("agent", "AI Agent", "ready", summary))
+    elif agent_value in {"not_started", "stopped"}:
+        services.append(_service("agent", "AI Agent", "error", "QCCA Agent 未运行", "请重新启动 QCCA 服务"))
+    elif agent_value == "failed":
+        services.append(_service("agent", "AI Agent", "error", "最近一次 Agent 调用失败", "请检查 Agent 登录和网络"))
+    else:
+        services.append(_service("agent", "AI Agent", "waiting", "正在确认 Agent 状态"))
+
+    audio_status = config_service.get_audio_model_status()
+    audio_value = audio_status.get("status", "unknown")
+    if audio_value == "ready":
+        services.append(_service("audio", "语音识别", "ready", "音频模型已加载", required=False))
+    elif audio_value == "loading":
+        services.append(_service("audio", "语音识别", "waiting", "首次加载音频模型", "文字消息不受影响", required=False))
+    elif audio_value in {"failed", "stopped"}:
+        services.append(_service("audio", "语音识别", "warning", "语音识别当前不可用", audio_status.get("message", "请查看 Agent 日志"), required=False))
+    else:
+        services.append(_service("audio", "语音识别", "waiting", "等待音频模型状态", "文字消息不受影响", required=False))
+
+    try:
+        smtp = _smtp_response()
+        if smtp["configured"]:
+            services.append(_service("smtp", "QQ 邮箱回复", "ready", f"发件账号 {smtp['selected_sender_qq']} 已配置", required=False))
+        else:
+            services.append(_service("smtp", "QQ 邮箱回复", "warning", "尚未配置邮箱授权码", "需要邮件回复时再配置", required=False))
+    except HTTPException as exc:
+        services.append(_service("smtp", "QQ 邮箱回复", "warning", "邮箱配置无法读取", str(exc.detail), required=False))
+
+    python_ready = sys.version_info >= (3, 10)
+    services.append(_service(
+        "python", "Python 环境", "ready" if python_ready else "error",
+        f"Python {sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
+        "请安装 Python 3.10 或更高版本" if not python_ready else "",
+    ))
+    ffmpeg_path = shutil.which("ffmpeg")
+    services.append(_service(
+        "ffmpeg", "FFmpeg", "ready" if ffmpeg_path else "warning",
+        "语音转换工具已安装" if ffmpeg_path else "未找到 FFmpeg",
+        "仅使用文字消息时可以暂不安装" if not ffmpeg_path else "",
+        required=False,
+    ))
+
+    required_error = any(item["required"] and item["status"] == "error" for item in services)
+    needs_attention = any(item["status"] in {"waiting", "warning", "error"} for item in services)
+    overall = "error" if required_error else ("attention" if needs_attention else "ready")
+    return {
+        "overall": overall,
+        "checked_at": time.time(),
+        "default_agent": default_agent,
+        "setup_completed": preferences["setup_completed"],
+        "services": services,
+    }
+
+
+@app.get("/qcca/system-status")
+def get_system_status():
+    """Return one friendly status list for the management page."""
+    return _system_status()
+
+
+@app.get("/qcca/setup")
+def get_setup_config():
+    try:
+        preferences = config_service.get_preferences()
+        smtp = _smtp_response()
+    except (OSError, config_service.PreferencesConfigError, config_service.SmtpConfigError) as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return {
+        **preferences,
+        "login_qq": smtp["login_qq"],
+        "smtp_configured": smtp["configured"],
+        "agents": [
+            {"name": name, "installed": shutil.which(name) is not None}
+            for name in sorted(VALID_AGENTS)
+        ],
+    }
+
+
+@app.put("/qcca/setup")
+def update_setup_config(config: SetupConfigUpdate):
+    default_agent = config.default_agent.strip().lower()
+    if default_agent not in VALID_AGENTS:
+        raise HTTPException(status_code=400, detail="默认 Agent 无效，可选：codex、claude")
+    auth_code = config.auth_code.strip()
+    login_qq = _get_current_login_qq()
+    if auth_code and not login_qq:
+        raise HTTPException(status_code=409, detail="当前 QQ 尚未登录，暂时无法保存邮箱授权码")
+    try:
+        if auth_code:
+            config_service.save_smtp_config(login_qq, auth_code)
+        preferences = config_service.save_preferences(default_agent, setup_completed=True)
+    except (OSError, ValueError, config_service.SmtpConfigError) as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return {
+        **preferences,
+        "login_qq": login_qq,
+        "smtp_configured": _smtp_response()["configured"],
     }
 
 

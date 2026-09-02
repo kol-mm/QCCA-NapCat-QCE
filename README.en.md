@@ -40,7 +40,7 @@ flowchart LR
 | --- | --- |
 | [NapCatQQ](https://github.com/NapNeko/NapCatQQ) | v4.18.19, QQ and OneBot interface |
 | [QQ Chat Exporter](https://github.com/shuakami/qq-chat-exporter) | v5.5.80, export and browse QQ chat records |
-| QCCA | v1.2.0; watches messages, invokes Codex or Claude, and replies through QQ Mail |
+| QCCA | v1.2.1; watches messages, invokes Codex or Claude, and replies through QQ Mail |
 | QCCA API | Local FastAPI management service |
 
 ## Features
@@ -51,8 +51,9 @@ flowchart LR
 - Transcribe voice messages with FunASR before processing.
 - Reply to message senders through QQ Mail SMTP.
 - Manage the Agent type, sandbox permissions, session records, and sender QQ accounts from a local web page.
+- Use the first-run wizard and one-page status overview to check NapCat, QCE, QCCA, Agent, audio, and SMTP at a glance.
 
-## What's New In 1.2.0
+## What's New In 1.2.1
 
 - Added Codex / Claude multi-Agent support. Sessions can switch Agent through QQ commands or the management page.
 - Added an Agent registry and isolated adapters so more coding Agents can be integrated without changing the message-processing flow.
@@ -61,6 +62,8 @@ flowchart LR
 - The management page shows Agent runtime status, workspace, session, session ID, and the latest 200 chat records.
 - Existing sessions now have an Agent selector while workspace paths, session names, and session IDs remain read-only.
 - Improved `/agent`, `/status`, `/sessions`, and `/cancel` commands and failure-state reporting.
+- Added a first-run setup wizard for environment checks, the default Agent for new sessions, and the current QQ Mail authorization code.
+- Added a unified runtime status overview with plain-language recovery actions when a service is unavailable.
 
 ## Quick Start
 
@@ -76,6 +79,7 @@ flowchart LR
 - Use `QCCA-NapCat-QCE.exe` for a release package, or `launcher-user.bat` from a source checkout.
 - After login, verify `http://127.0.0.1:3000`, `http://127.0.0.1:40653/qce`, and `http://127.0.0.1:40655/health`.
 - Before using Codex or Claude, make sure its CLI is installed, authenticated, and able to run independently on the current network.
+- The setup wizard opens the first time you visit the QCCA management page. Use the `Start wizard` button at the top to open it again later.
 - If mail replies are needed, enter an authorization code for the sender QQ in the QCCA management page.
 - The first voice-processing run may load the FunASR model; allow time and disk space for initialization.
 
