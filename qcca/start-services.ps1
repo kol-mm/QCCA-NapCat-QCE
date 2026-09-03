@@ -6,6 +6,8 @@
 )
 
 $ErrorActionPreference = "Stop"
+$env:PYTHONHOME = $null
+$env:PYTHONPATH = $null
 # PowerShell 7 can promote stderr from native commands to terminating errors.
 # Import checks intentionally use a non-zero exit code when a module is absent.
 if (Get-Variable -Name PSNativeCommandUseErrorActionPreference -ErrorAction SilentlyContinue) {
@@ -16,6 +18,43 @@ $apiOut = Join-Path $LogDirectory "qcca-api.log.out"
 $apiErr = Join-Path $LogDirectory "qcca-api.log.err"
 $agentOut = Join-Path $LogDirectory "qcca-agent.log.out"
 $agentErr = Join-Path $LogDirectory "qcca-agent.log.err"
+$runStamp = Get-Date -Format "yyyyMMdd-HHmmss-fff"
+
+function Initialize-LogFile {
+    param([string]$PreferredPath)
+
+    # NapCat or a previous service can briefly keep the normal log open. Do
+    # not fail the whole QCCA startup in that case; use a per-run log file.
+    try {
+        $stream = [IO.File]::Open(
+            $PreferredPath,
+            [IO.FileMode]::OpenOrCreate,
+            [IO.FileAccess]::ReadWrite,
+            [IO.FileShare]::None
+        )
+        try { $stream.SetLength(0) } finally { $stream.Dispose() }
+        return $PreferredPath
+    } catch {
+        $directory = Split-Path -Parent $PreferredPath
+        $baseName = [IO.Path]::GetFileNameWithoutExtension($PreferredPath)
+        $extension = [IO.Path]::GetExtension($PreferredPath)
+        $fallbackPath = Join-Path $directory ("{0}-{1}{2}" -f $baseName, $runStamp, $extension)
+        try {
+            $fallbackStream = [IO.File]::Open(
+                $fallbackPath,
+                [IO.FileMode]::Create,
+                [IO.FileAccess]::Write,
+                [IO.FileShare]::ReadWrite
+            )
+            $fallbackStream.Dispose()
+            Write-Host "[Warning] Log file is locked: $PreferredPath"
+            Write-Host "[Info] Using per-run log file: $fallbackPath"
+            return $fallbackPath
+        } catch {
+            throw "无法创建 QCCA 日志文件：$PreferredPath；备用路径也不可用：$fallbackPath。$($_.Exception.Message)"
+        }
+    }
+}
 
 function Stop-ExistingQccaProcesses {
     # A forced console close can leave either service alive without a PID file.
@@ -114,9 +153,10 @@ Get-ChildItem -LiteralPath $LogDirectory -Directory -Filter "qcca-test-*" -Error
 
 # Start each run with clean UTF-8 log files. Older PowerShell redirection used
 # UTF-16LE, whose NUL bytes otherwise remain visible in the next run's logs.
-foreach ($logFile in @($apiOut, $apiErr, $agentOut, $agentErr)) {
-    Set-Content -LiteralPath $logFile -Value "" -Encoding UTF8
-}
+$apiOut = Initialize-LogFile $apiOut
+$apiErr = Initialize-LogFile $apiErr
+$agentOut = Initialize-LogFile $agentOut
+$agentErr = Initialize-LogFile $agentErr
 
 function Start-HiddenService {
     param([string[]]$Arguments, [string]$OutputLog, [string]$ErrorLog)
@@ -144,15 +184,18 @@ function Stop-StartedService {
 }
 
 function Test-PythonImports {
-    param([string[]]$Modules)
+    param([string[]]$Modules, [string]$ErrorLog = "")
     $importStatement = "import " + ($Modules -join ", ")
     $previousErrorAction = $ErrorActionPreference
     $ErrorActionPreference = "SilentlyContinue"
     try {
-        & $PythonPath -c $importStatement 1>$null 2>$null
+        $importOutput = @(& $PythonPath -c $importStatement 2>&1)
         $exitCode = $LASTEXITCODE
     } finally {
         $ErrorActionPreference = $previousErrorAction
+    }
+    if ($exitCode -ne 0 -and $ErrorLog -and $importOutput.Count -gt 0) {
+        Add-Content -LiteralPath $ErrorLog -Value ("[Python import check] " + (($importOutput | ForEach-Object { [string]$_ }) -join "`n")) -Encoding UTF8
     }
     return ($exitCode -eq 0)
 }
@@ -210,12 +253,12 @@ function Install-Requirements {
 $previousPythonUtf8 = $env:PYTHONUTF8
 $env:PYTHONUTF8 = "1"
 
-if (-not (Test-PythonImports @("fastapi", "uvicorn"))) {
+if (-not (Test-PythonImports @("fastapi", "uvicorn") $apiErr)) {
     if (-not (Install-Requirements (Join-Path $QccaDirectory "api-requirements.txt") $apiErr "API")) {
         Get-Content -LiteralPath $apiErr -Tail 25 | ForEach-Object { Write-Host $_ }
         exit 1
     }
-    if (-not (Test-PythonImports @("fastapi", "uvicorn"))) {
+    if (-not (Test-PythonImports @("fastapi", "uvicorn") $apiErr)) {
         Add-Content -LiteralPath $apiErr -Value "[API] Dependencies were installed, but fastapi/uvicorn still cannot be imported."
         Get-Content -LiteralPath $apiErr -Tail 25 | ForEach-Object { Write-Host $_ }
         exit 1
@@ -248,7 +291,7 @@ if (-not $apiReady) {
     exit 1
 }
 
-if (-not (Test-PythonImports @("watchdog", "funasr", "pysilk", "torch", "torchaudio", "requests"))) {
+if (-not (Test-PythonImports @("watchdog", "funasr", "pysilk", "torch", "torchaudio", "requests") $agentErr)) {
     if (-not (Install-Requirements (Join-Path $QccaDirectory "requirements.txt") $agentErr "Agent")) {
         Add-Content -LiteralPath $agentErr -Value "[Agent] Agent dependencies failed to install; Agent was not started."
         Get-Content -LiteralPath $agentErr -Tail 25 | ForEach-Object { Write-Host $_ }
@@ -256,7 +299,7 @@ if (-not (Test-PythonImports @("watchdog", "funasr", "pysilk", "torch", "torchau
         $env:PYTHONUTF8 = $previousPythonUtf8
         exit 1
     }
-    if (-not (Test-PythonImports @("watchdog", "funasr", "pysilk", "torch", "torchaudio", "requests"))) {
+    if (-not (Test-PythonImports @("watchdog", "funasr", "pysilk", "torch", "torchaudio", "requests") $agentErr)) {
         Add-Content -LiteralPath $agentErr -Value "[Agent] Dependencies were installed, but one or more Agent modules still cannot be imported."
         Get-Content -LiteralPath $agentErr -Tail 25 | ForEach-Object { Write-Host $_ }
         Stop-StartedService $apiProcess "api"

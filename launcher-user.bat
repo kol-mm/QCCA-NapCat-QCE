@@ -205,6 +205,10 @@ if not exist "%QCCA_LOG_DIR%" mkdir "%QCCA_LOG_DIR%"
 set "QCCA_API_LOG=%QCCA_LOG_DIR%\qcca-api.log"
 set "QCCA_AGENT_LOG=%QCCA_LOG_DIR%\qcca-agent.log"
 
+rem Prevent a system-wide Python installation from contaminating the venv.
+set "PYTHONHOME="
+set "PYTHONPATH="
+
 rem 检查 QCCA 模块是否存在
 if not exist "%QCCA_DIR%\qq_cloud_control_agent.py" (
     echo [Warning] QCCA module not found, skipping.
@@ -232,7 +236,7 @@ if exist "%QCCA_VENV%\Scripts\python.exe" (
 if not exist "%QCCA_VENV%\Scripts\python.exe" (
     echo [Info] 检测到首次启动, 正在初始化 QCCA 运行环境...
     echo [Info] Creating Python virtual environment...
-    python -m venv "%QCCA_VENV%"
+    python -m venv --clear "%QCCA_VENV%"
     if not exist "%QCCA_VENV%\Scripts\python.exe" (
         echo [Error] Failed to create virtual environment.
         goto :qcca_done
