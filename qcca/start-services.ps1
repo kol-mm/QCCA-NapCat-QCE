@@ -171,15 +171,22 @@ function Install-Requirements {
             $pipArguments += @("--trusted-host", "pypi.tuna.tsinghua.edu.cn")
         }
 
-        # pip writes warnings such as package deprecations to stderr. Keep that
-        # output in the log, but do not let PowerShell treat it as an exception.
-        $previousErrorAction = $ErrorActionPreference
-        $ErrorActionPreference = "SilentlyContinue"
+        # Do not use PowerShell 5's *>> redirection here: it writes UTF-16LE,
+        # which appears as garbled text when the log is opened as UTF-8.
+        $pipStdout = Join-Path $LogDirectory (".qcca-{0}-pip-{1}.out" -f $Component, $PID)
+        $pipStderr = Join-Path $LogDirectory (".qcca-{0}-pip-{1}.err" -f $Component, $PID)
         try {
-            & $PythonPath @pipArguments *>> $ErrorLog
-            $pipExitCode = $LASTEXITCODE
+            $pipProcess = Start-Process -FilePath $PythonPath -ArgumentList $pipArguments -WorkingDirectory $QccaDirectory `
+                -WindowStyle Hidden -RedirectStandardOutput $pipStdout -RedirectStandardError $pipStderr -Wait -PassThru
+            $pipExitCode = $pipProcess.ExitCode
+            foreach ($pipLog in @($pipStdout, $pipStderr)) {
+                if (Test-Path -LiteralPath $pipLog) {
+                    $text = [IO.File]::ReadAllText($pipLog, [Text.Encoding]::UTF8)
+                    if ($text) { Add-Content -LiteralPath $ErrorLog -Value $text -Encoding UTF8 }
+                }
+            }
         } finally {
-            $ErrorActionPreference = $previousErrorAction
+            Remove-Item -LiteralPath $pipStdout, $pipStderr -Force -ErrorAction SilentlyContinue
         }
         if ($pipExitCode -eq 0) {
             Add-Content -LiteralPath $ErrorLog -Value "[$Component] Dependencies installed successfully."

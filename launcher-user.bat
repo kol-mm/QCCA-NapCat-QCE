@@ -238,6 +238,11 @@ if not exist "%QCCA_VENV%\Scripts\python.exe" (
         goto :qcca_done
     )
     echo [Info] Virtual environment created at: %QCCA_VENV%
+    "%QCCA_PYTHON%" -c "import encodings,sys" >nul 2>&1
+    if !errorLevel! neq 0 (
+        echo [Error] 新建的 QCCA 虚拟环境无法启动，请确认 Python 3.10+ 安装完整。
+        goto :qcca_done
+    )
 )
 
 if not defined QCCA_API_PORT set "QCCA_API_PORT=40655"
