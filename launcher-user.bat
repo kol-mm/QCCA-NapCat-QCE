@@ -254,13 +254,13 @@ if !errorLevel! neq 0 (
     echo [Info] QCCA API and Agent started successfully. Health: http://127.0.0.1:!QCCA_API_PORT!/health
 )
 
-rem Always launch the tray controller, including when dependency installation or
-rem service startup fails. This gives the user a way to retry, inspect status,
-rem or stop leftover services without reopening a console window.
-set "QCCA_API_PORT=!QCCA_API_PORT!"
-start "QCCA Tray" /min powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hidden -File "%QCCA_DIR%\qcca-tray.ps1"
-
 :qcca_done
+rem Always launch the tray controller, including early exits caused by a
+rem missing/broken Python environment. This keeps recovery controls available.
+if exist "%QCCA_DIR%\qcca-tray.ps1" (
+    set "QCCA_API_PORT=!QCCA_API_PORT!"
+    start "QCCA Tray" /min powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hidden -File "%QCCA_DIR%\qcca-tray.ps1"
+)
 echo ============================================
 rem ============================================================
 rem QCCA 启动结束

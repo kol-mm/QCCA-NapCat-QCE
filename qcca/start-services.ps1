@@ -158,7 +158,7 @@ function Install-Requirements {
         "https://pypi.org/simple",
         "https://pypi.tuna.tsinghua.edu.cn/simple"
     )
-    Set-Content -LiteralPath $ErrorLog -Value "[$Component] Python dependencies are missing; starting installation."
+    Set-Content -LiteralPath $ErrorLog -Value "[$Component] Python dependencies are missing; starting installation." -Encoding UTF8
 
     foreach ($mirror in $mirrors) {
         Add-Content -LiteralPath $ErrorLog -Value "[$Component] Trying package index: $mirror"
