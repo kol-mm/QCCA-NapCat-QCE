@@ -17,6 +17,23 @@ $apiErr = Join-Path $LogDirectory "qcca-api.log.err"
 $agentOut = Join-Path $LogDirectory "qcca-agent.log.out"
 $agentErr = Join-Path $LogDirectory "qcca-agent.log.err"
 
+# NapCat scans the shared log directory during startup and expects every
+# matching entry to be a file. Older QCCA test runs left directories named
+# qcca-test-*, which made NapCat call unlink() on a directory on Windows and
+# emit repeated EPERM errors. Remove only stale test directories; normal logs
+# and user data are left untouched.
+$staleTestCutoff = (Get-Date).AddDays(-7)
+Get-ChildItem -LiteralPath $LogDirectory -Directory -Filter "qcca-test-*" -ErrorAction SilentlyContinue |
+    Where-Object { $_.LastWriteTime -lt $staleTestCutoff } |
+    ForEach-Object {
+        try {
+            Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction Stop
+            Write-Host "[Info] Removed stale QCCA test log directory: $($_.Name)"
+        } catch {
+            Write-Warning "Could not remove stale QCCA test log directory: $($_.FullName)"
+        }
+    }
+
 function Start-HiddenService {
     param([string[]]$Arguments, [string]$OutputLog, [string]$ErrorLog)
     return Start-Process -FilePath $PythonPath -ArgumentList $Arguments -WorkingDirectory $QccaDirectory -WindowStyle Hidden -RedirectStandardOutput $OutputLog -RedirectStandardError $ErrorLog -PassThru
