@@ -194,6 +194,7 @@ echo.
 echo ============================================
 echo   QCCA - QQ Cloud Control Agent
 echo ============================================
+echo [Info] 首次启动需要安装 Python 依赖并加载语音模型, 可能需要几分钟, 请不要关闭此窗口.
 
 set "QCCA_DIR=%cd%\qcca"
 set "QCCA_VENV=%QCCA_DIR%\.venv"
@@ -220,6 +221,7 @@ if !errorLevel! neq 0 (
 
 rem 创建虚拟环境（如果不存在）
 if not exist "%QCCA_VENV%\Scripts\python.exe" (
+    echo [Info] 检测到首次启动, 正在初始化 QCCA 运行环境...
     echo [Info] Creating Python virtual environment...
     python -m venv "%QCCA_VENV%"
     if not exist "%QCCA_VENV%\Scripts\python.exe" (
