@@ -112,6 +112,12 @@ Get-ChildItem -LiteralPath $LogDirectory -Directory -Filter "qcca-test-*" -Error
         }
     }
 
+# Start each run with clean UTF-8 log files. Older PowerShell redirection used
+# UTF-16LE, whose NUL bytes otherwise remain visible in the next run's logs.
+foreach ($logFile in @($apiOut, $apiErr, $agentOut, $agentErr)) {
+    Set-Content -LiteralPath $logFile -Value "" -Encoding UTF8
+}
+
 function Start-HiddenService {
     param([string[]]$Arguments, [string]$OutputLog, [string]$ErrorLog)
     return Start-Process -FilePath $PythonPath -ArgumentList $Arguments -WorkingDirectory $QccaDirectory -WindowStyle Hidden -RedirectStandardOutput $OutputLog -RedirectStandardError $ErrorLog -PassThru
