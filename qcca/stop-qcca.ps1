@@ -29,6 +29,22 @@ foreach ($name in @("api", "agent")) {
     }
 }
 
+# PID files are intentionally ignored by some older builds. Recover services
+# left behind by those builds by matching the executable to this QCCA venv.
+$pythonPath = Join-Path $qccaDirectory ".venv\Scripts\python.exe"
+if (Test-Path -LiteralPath $pythonPath) {
+    try {
+        $pythonFullPath = [IO.Path]::GetFullPath($pythonPath)
+        foreach ($process in @(Get-Process -Name "python", "python3" -ErrorAction SilentlyContinue)) {
+            try {
+                if ([IO.Path]::GetFullPath($process.Path) -ieq $pythonFullPath) {
+                    Stop-Tree $process.Id
+                }
+            } catch { }
+        }
+    } catch { }
+}
+
 if ($IncludeQQ) {
     & taskkill.exe /IM NapCatWinBootMain.exe /T /F *> $null
     & taskkill.exe /IM QQ.exe /T /F *> $null

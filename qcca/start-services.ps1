@@ -17,32 +17,83 @@ $apiErr = Join-Path $LogDirectory "qcca-api.log.err"
 $agentOut = Join-Path $LogDirectory "qcca-agent.log.out"
 $agentErr = Join-Path $LogDirectory "qcca-agent.log.err"
 
-function Stop-ExistingApiListener {
-    # A previous launch can survive without its PID file (for example after a
-    # forced console close) and keep the redirected log handle open. Only
-    # reclaim the configured port when its owner is this QCCA virtualenv.
+function Stop-ExistingQccaProcesses {
+    # A forced console close can leave either service alive without a PID file.
+    # Stop only Python processes launched from this QCCA virtualenv so an
+    # unrelated system Python process is never touched. This also releases
+    # redirected log handles before Start-Process opens the same files again.
     $pythonFullPath = [IO.Path]::GetFullPath($PythonPath)
-    $listeners = Get-NetTCPConnection -State Listen -LocalAddress "127.0.0.1" -LocalPort $Port -ErrorAction SilentlyContinue
-    foreach ($listener in $listeners) {
-        try {
-            $process = Get-Process -Id $listener.OwningProcess -ErrorAction Stop
-            $processPath = [IO.Path]::GetFullPath($process.Path)
-            if ($processPath -ieq $pythonFullPath) {
-                Write-Host "[Info] Stopping previous QCCA API process (PID $($process.Id))..."
-                & taskkill.exe /PID $process.Id /T /F *> $null
-            }
-        } catch {
-            # The process may exit between the listener and process queries.
+    $processIds = [System.Collections.Generic.HashSet[int]]::new()
+
+    foreach ($name in @("api", "agent")) {
+        $pidFile = Join-Path $LogDirectory "qcca-$name.pid"
+        if (Test-Path -LiteralPath $pidFile) {
+            try {
+                $raw = (Get-Content -LiteralPath $pidFile -Raw -ErrorAction Stop).Trim()
+                $pidValue = 0
+                if ([int]::TryParse(($raw -split '\|', 2)[0], [ref]$pidValue)) {
+                    try {
+                        $recordedProcess = Get-Process -Id $pidValue -ErrorAction Stop
+                        if ([IO.Path]::GetFullPath($recordedProcess.Path) -ieq $pythonFullPath) {
+                            [void]$processIds.Add($pidValue)
+                        }
+                    } catch { }
+                }
+            } catch { }
         }
     }
-    for ($attempt = 0; $attempt -lt 20; $attempt++) {
-        $stillListening = Get-NetTCPConnection -State Listen -LocalAddress "127.0.0.1" -LocalPort $Port -ErrorAction SilentlyContinue
-        if (-not $stillListening) { break }
+
+    # Include any matching virtualenv process even when its PID file was lost.
+    foreach ($candidate in @(Get-Process -Name "python", "python3" -ErrorAction SilentlyContinue)) {
+        try {
+            if ([IO.Path]::GetFullPath($candidate.Path) -ieq $pythonFullPath) {
+                [void]$processIds.Add($candidate.Id)
+            }
+        } catch { }
+    }
+
+    # Also inspect the configured API port. Do not terminate another program
+    # that happens to use the same port unless its executable is this Python.
+    foreach ($listener in @(Get-NetTCPConnection -State Listen -LocalAddress "127.0.0.1" -LocalPort $Port -ErrorAction SilentlyContinue)) {
+        try {
+            $owner = Get-Process -Id $listener.OwningProcess -ErrorAction Stop
+            if ([IO.Path]::GetFullPath($owner.Path) -ieq $pythonFullPath) {
+                [void]$processIds.Add($owner.Id)
+            }
+        } catch { }
+    }
+
+    foreach ($processId in $processIds) {
+        try {
+            $process = Get-Process -Id $processId -ErrorAction Stop
+            Write-Host "[Info] Stopping previous QCCA service process (PID $processId)..."
+            & taskkill.exe /PID $processId /T /F *> $null
+        } catch { }
+    }
+
+    for ($attempt = 0; $attempt -lt 50; $attempt++) {
+        $remaining = @(Get-Process -Name "python", "python3" -ErrorAction SilentlyContinue | Where-Object {
+            try { [IO.Path]::GetFullPath($_.Path) -ieq $pythonFullPath } catch { $false }
+        })
+        $stillListening = @(Get-NetTCPConnection -State Listen -LocalAddress "127.0.0.1" -LocalPort $Port -ErrorAction SilentlyContinue)
+        if ($remaining.Count -eq 0 -and $stillListening.Count -eq 0) { break }
         Start-Sleep -Milliseconds 100
+    }
+
+    $remaining = @(Get-Process -Name "python", "python3" -ErrorAction SilentlyContinue | Where-Object {
+        try { [IO.Path]::GetFullPath($_.Path) -ieq $pythonFullPath } catch { $false }
+    })
+    if ($remaining.Count -gt 0) {
+        $ids = ($remaining | ForEach-Object Id) -join ", "
+        throw "无法停止旧的 QCCA 服务进程（PID $ids）。请以管理员身份运行启动器，或先在任务管理器中结束这些进程。"
+    }
+
+    foreach ($name in @("api", "agent")) {
+        Remove-Item -LiteralPath (Join-Path $LogDirectory "qcca-$name.pid") -Force -ErrorAction SilentlyContinue
     }
 }
 
-Stop-ExistingApiListener
+Stop-ExistingQccaProcesses
 
 # NapCat scans the shared log directory during startup and expects every
 # matching entry to be a file. Older QCCA test runs left directories named
@@ -164,6 +215,14 @@ $healthUrl = "http://127.0.0.1:$Port/health"
 $apiReady = $false
 for ($attempt = 0; $attempt -lt 20; $attempt++) {
     try {
+        $apiProcess.Refresh()
+        if ($apiProcess.HasExited) { break }
+        $apiListener = @(Get-NetTCPConnection -State Listen -LocalAddress "127.0.0.1" -LocalPort $Port -ErrorAction SilentlyContinue |
+            Where-Object { $_.OwningProcess -eq $apiProcess.Id })
+        if ($apiListener.Count -eq 0) {
+            Start-Sleep -Milliseconds 250
+            continue
+        }
         $health = Invoke-WebRequest -Uri $healthUrl -UseBasicParsing -TimeoutSec 1
         if ($health.StatusCode -eq 200) { $apiReady = $true; break }
     } catch { }

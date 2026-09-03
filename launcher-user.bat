@@ -220,6 +220,15 @@ if !errorLevel! neq 0 (
 )
 
 rem 创建虚拟环境（如果不存在）
+if exist "%QCCA_VENV%\Scripts\python.exe" (
+    rem 发行包不能复用另一台电脑生成的虚拟环境，先验证解释器是否可迁移。
+    "%QCCA_PYTHON%" -c "import encodings,sys" >nul 2>&1
+    if !errorLevel! neq 0 (
+        echo [Warning] 检测到损坏或不可迁移的 QCCA 虚拟环境, 正在重建...
+        powershell -NoProfile -ExecutionPolicy Bypass -File "%QCCA_DIR%\stop-qcca.ps1" >nul 2>&1
+        rmdir /s /q "%QCCA_VENV%" >nul 2>&1
+    )
+)
 if not exist "%QCCA_VENV%\Scripts\python.exe" (
     echo [Info] 检测到首次启动, 正在初始化 QCCA 运行环境...
     echo [Info] Creating Python virtual environment...

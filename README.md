@@ -172,6 +172,8 @@ QCCA API 文档的默认地址是 `http://127.0.0.1:40655/docs`，管理页面�
 
 Windows 发行包不会携带开发机的 `.venv`、模型缓存或个人配置。首次启动需要联网安装 Python 依赖，因此初始化时间取决于网络速度；后续启动会复用已创建的环境。
 
+不要从其他电脑复制 `qcca\\.venv`。虚拟环境会记录创建它的 Python 安装路径；如果路径失效，启动器会检测到并自动重建环境。
+
 ## 常见问题
 
 ### 启动时提示 `Cannot find package 'express'`
@@ -185,6 +187,8 @@ Windows 发行包不会携带开发机的 `.venv`、模型缓存或个人配置�
 ```powershell
 .venv\Scripts\pip install -r requirements.txt
 ```
+
+如果日志出现 `No module named encodings`，说明现有 `.venv` 已损坏或来自另一台电脑。关闭 QCCA 后删除 `qcca\\.venv`，再运行启动器即可自动创建新的环境。
 
 ### QCCA 管理页面无法打开
 
