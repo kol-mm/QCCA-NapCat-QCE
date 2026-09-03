@@ -7,7 +7,7 @@ $qccaPort = if ($env:QCCA_API_PORT) { $env:QCCA_API_PORT } else { "40655" }
 $qcePort = if ($env:QCE_SERVER_PORT) { $env:QCE_SERVER_PORT } else { "40653" }
 $qccaUrl = "http://127.0.0.1:$qccaPort"
 $qceUrl = "http://127.0.0.1:$qcePort"
-$qccaPageUrl = "$qceUrl/qce/qcca/?apiPort=$qccaPort"
+$qccaPageUrl = "$qccaUrl/qcca/"
 $stopScript = Join-Path $qccaDirectory "stop-qcca.ps1"
 $iconPath = Join-Path $qccaDirectory "qcca-app-icon.ico"
 

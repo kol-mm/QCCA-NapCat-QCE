@@ -71,7 +71,7 @@ flowchart LR
 2. In a release package, double-click `QCCA-NapCat-QCE.exe`; from a source checkout, run `launcher-user.bat`.
 3. Sign in through the QQ client.
 4. Open `http://localhost:40653/qce` and enter the console access token.
-5. Open `http://localhost:40653/qce/qcca/` to manage QCCA.
+5. Open `http://localhost:40655/qcca/` to manage QCCA. This standalone entry is served by QCCA and does not depend on the QCE web server.
 
 ### First-run checklist
 

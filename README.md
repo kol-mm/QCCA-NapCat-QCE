@@ -71,7 +71,7 @@ flowchart LR
 2. 使用发行包时双击 `QCCA-NapCat-QCE.exe`；从源码目录运行 `launcher-user.bat`。
 3. 在 QQ 客户端完成登录。
 4. 打开 `http://localhost:40653/qce`，按控制台提示输入访问令牌。
-5. 打开 `http://localhost:40653/qce/qcca/` 管理 QCCA 配置。
+5. 打开 `http://localhost:40655/qcca/` 管理 QCCA 配置；该入口由 QCCA API 提供，不依赖 QCE 网页服务。
 
 ### 首次运行检查清单
 
@@ -158,7 +158,7 @@ QCCA 的用户、工作区和会话配置文件：
 | `127.0.0.1:40654` | QQ Chat Exporter 与 NapCat 的桥接服务 |
 | `127.0.0.1:40655` | QCCA FastAPI 管理服务，默认端口，可通过 `QCCA_API_PORT` 修改 |
 
-QCCA API 文档的默认地址是 `http://127.0.0.1:40655/docs`。使用自定义端口时，将地址中的 `40655` 替换为所配置的端口；管理页面可通过 `?apiPort=端口` 指向该 API。
+QCCA API 文档的默认地址是 `http://127.0.0.1:40655/docs`，管理页面的独立入口是 `http://127.0.0.1:40655/qcca/`。使用自定义端口时，将地址中的 `40655` 替换为所配置的端口。
 
 ## 系统要求
 
@@ -191,7 +191,7 @@ Windows 发行包不会携带开发机的 `.venv`、模型缓存或个人配置�
 确认 `launcher-user.bat` 已启动 QCCA API，并打开 `http://127.0.0.1:40655/docs` 检查服务。若端口被占用，请设置 `QCCA_API_PORT` 后重启，并使用：
 
 ```text
-http://localhost:40653/qce/qcca/?apiPort=端口号
+http://localhost:40655/qcca/
 ```
 
 ### 语音识别失败

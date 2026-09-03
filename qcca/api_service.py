@@ -15,6 +15,8 @@ from urllib.request import urlopen
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 import config_service
@@ -37,6 +39,24 @@ app.add_middleware(
     allow_methods=["GET", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type"],
 )
+
+_qcca_static_dir = Path(__file__).resolve().parents[1] / "static" / "qce" / "qcca"
+_qcca_index = _qcca_static_dir / "index.html"
+if _qcca_static_dir.is_dir():
+    # Keep the management page available when QCE's web server is unavailable.
+    app.mount("/static/qce/qcca", StaticFiles(directory=_qcca_static_dir), name="qcca-static")
+
+
+@app.get("/qcca", include_in_schema=False)
+def qcca_ui_redirect():
+    return RedirectResponse(url="/qcca/")
+
+
+@app.get("/qcca/", include_in_schema=False)
+def qcca_ui():
+    if not _qcca_index.is_file():
+        raise HTTPException(status_code=404, detail="QCCA 管理页面文件不存在")
+    return FileResponse(_qcca_index)
 
 
 @app.get("/health")
