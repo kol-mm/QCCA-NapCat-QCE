@@ -17,6 +17,33 @@ $apiErr = Join-Path $LogDirectory "qcca-api.log.err"
 $agentOut = Join-Path $LogDirectory "qcca-agent.log.out"
 $agentErr = Join-Path $LogDirectory "qcca-agent.log.err"
 
+function Stop-ExistingApiListener {
+    # A previous launch can survive without its PID file (for example after a
+    # forced console close) and keep the redirected log handle open. Only
+    # reclaim the configured port when its owner is this QCCA virtualenv.
+    $pythonFullPath = [IO.Path]::GetFullPath($PythonPath)
+    $listeners = Get-NetTCPConnection -State Listen -LocalAddress "127.0.0.1" -LocalPort $Port -ErrorAction SilentlyContinue
+    foreach ($listener in $listeners) {
+        try {
+            $process = Get-Process -Id $listener.OwningProcess -ErrorAction Stop
+            $processPath = [IO.Path]::GetFullPath($process.Path)
+            if ($processPath -ieq $pythonFullPath) {
+                Write-Host "[Info] Stopping previous QCCA API process (PID $($process.Id))..."
+                & taskkill.exe /PID $process.Id /T /F *> $null
+            }
+        } catch {
+            # The process may exit between the listener and process queries.
+        }
+    }
+    for ($attempt = 0; $attempt -lt 20; $attempt++) {
+        $stillListening = Get-NetTCPConnection -State Listen -LocalAddress "127.0.0.1" -LocalPort $Port -ErrorAction SilentlyContinue
+        if (-not $stillListening) { break }
+        Start-Sleep -Milliseconds 100
+    }
+}
+
+Stop-ExistingApiListener
+
 # NapCat scans the shared log directory during startup and expects every
 # matching entry to be a file. Older QCCA test runs left directories named
 # qcca-test-*, which made NapCat call unlink() on a directory on Windows and
