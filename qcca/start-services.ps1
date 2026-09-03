@@ -1,4 +1,4 @@
-param(
+﻿param(
     [Parameter(Mandatory = $true)][string]$PythonPath,
     [Parameter(Mandatory = $true)][string]$QccaDirectory,
     [Parameter(Mandatory = $true)][int]$Port,
@@ -84,7 +84,7 @@ function Stop-ExistingQccaProcesses {
         try { [IO.Path]::GetFullPath($_.Path) -ieq $pythonFullPath } catch { $false }
     })
     if ($remaining.Count -gt 0) {
-        $ids = ($remaining | ForEach-Object Id) -join ", "
+        $ids = ($remaining | ForEach-Object { $_.Id }) -join ", "
         throw "无法停止旧的 QCCA 服务进程（PID $ids）。请以管理员身份运行启动器，或先在任务管理器中结束这些进程。"
     }
 

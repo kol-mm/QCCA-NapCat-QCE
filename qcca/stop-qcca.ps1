@@ -1,4 +1,4 @@
-param([switch]$IncludeQQ)
+﻿param([switch]$IncludeQQ)
 
 $ErrorActionPreference = "SilentlyContinue"
 $qccaDirectory = Split-Path -Parent $MyInvocation.MyCommand.Path
