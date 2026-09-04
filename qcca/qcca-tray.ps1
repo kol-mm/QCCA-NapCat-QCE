@@ -11,6 +11,7 @@ $qccaPageUrl = "$qccaUrl/qcca/"
 $stopScript = Join-Path $qccaDirectory "stop-qcca.ps1"
 $startScript = Join-Path $qccaDirectory "start-services.ps1"
 $pythonPath = Join-Path $qccaDirectory ".venv\Scripts\python.exe"
+$venvDirectory = Join-Path $qccaDirectory ".venv"
 $logDirectory = if ($env:QCE_LOG_DIR) { $env:QCE_LOG_DIR } else { Join-Path $rootDirectory "logs" }
 $iconPath = Join-Path $qccaDirectory "qcca-app-icon.ico"
 
@@ -28,14 +29,47 @@ function Open-Url([string]$Url) {
     Start-Process $Url
 }
 
-function Restart-QccaServices {
-    if (-not (Test-Path -LiteralPath $pythonPath)) {
-        [System.Windows.Forms.MessageBox]::Show("QCCA 虚拟环境不存在，请重新运行启动文件。", "QCCA 重启失败") | Out-Null
-        return
-    }
+function Ensure-PythonEnvironment {
+    $previousPythonHome = $env:PYTHONHOME
+    $previousPythonPath = $env:PYTHONPATH
+    $env:PYTHONHOME = $null
+    $env:PYTHONPATH = $null
+    try {
+        if (Test-Path -LiteralPath $pythonPath) {
+            & $pythonPath -c "import encodings,sys" *> $null
+            if ($LASTEXITCODE -eq 0) { return $true }
+            [System.Windows.Forms.MessageBox]::Show(
+                "检测到旧的 QCCA 虚拟环境不可用，正在按当前电脑的 Python 重新创建。首次启动可能需要几分钟。",
+                "QCCA"
+            ) | Out-Null
+        }
 
+        $systemPython = Get-Command python.exe -ErrorAction SilentlyContinue
+        if (-not $systemPython) {
+            throw "未找到 Python 3.10 或更高版本。"
+        }
+        if (Test-Path -LiteralPath $venvDirectory) {
+            Remove-Item -LiteralPath $venvDirectory -Recurse -Force -ErrorAction SilentlyContinue
+        }
+        & $systemPython.Source -m venv --clear $venvDirectory
+        if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $pythonPath)) {
+            throw "无法创建 QCCA 虚拟环境。"
+        }
+        & $pythonPath -c "import encodings,sys" *> $null
+        if ($LASTEXITCODE -ne 0) {
+            throw "新建的 QCCA 虚拟环境无法启动。"
+        }
+        return $true
+    } finally {
+        $env:PYTHONHOME = $previousPythonHome
+        $env:PYTHONPATH = $previousPythonPath
+    }
+}
+
+function Restart-QccaServices {
     try {
         & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $stopScript
+        Ensure-PythonEnvironment | Out-Null
         $startOutput = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $startScript `
             -PythonPath $pythonPath -QccaDirectory $qccaDirectory -Port ([int]$qccaPort) -LogDirectory $logDirectory 2>&1
         if ($LASTEXITCODE -ne 0) {
