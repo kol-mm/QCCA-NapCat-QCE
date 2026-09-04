@@ -6,6 +6,12 @@
 )
 
 $ErrorActionPreference = "Stop"
+# Keep host output aligned with the UTF-8 launcher code page. This affects
+# visible startup diagnostics; service logs are written explicitly as UTF-8.
+$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+[Console]::InputEncoding = $utf8NoBom
+[Console]::OutputEncoding = $utf8NoBom
+$OutputEncoding = $utf8NoBom
 $env:PYTHONHOME = $null
 $env:PYTHONPATH = $null
 # PowerShell 7 can promote stderr from native commands to terminating errors.

@@ -3,6 +3,10 @@ chcp 65001 >nul
 setlocal enabledelayedexpansion
 cd /d "%~dp0"
 
+rem Keep Python and PowerShell messages UTF-8 in the launcher console and logs.
+set "PYTHONUTF8=1"
+set "PYTHONIOENCODING=utf-8"
+
 rem Ensure OneBot HTTP API is available at http://127.0.0.1:3000
 powershell -NoProfile -ExecutionPolicy Bypass -File "%cd%\enable-onebot-http.ps1" -Port 3000
 
