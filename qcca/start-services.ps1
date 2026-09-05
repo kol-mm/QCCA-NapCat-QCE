@@ -246,7 +246,14 @@ function Install-Requirements {
         $pipStderr = Join-Path $LogDirectory (".qcca-{0}-pip-{1}.err" -f $Component, $PID)
         try {
             $pipProcess = Start-Process -FilePath $PythonPath -ArgumentList $pipArguments -WorkingDirectory $QccaDirectory `
-                -WindowStyle Hidden -RedirectStandardOutput $pipStdout -RedirectStandardError $pipStderr -Wait -PassThru
+                -WindowStyle Hidden -RedirectStandardOutput $pipStdout -RedirectStandardError $pipStderr -PassThru
+            $startedAt = Get-Date
+            while (-not $pipProcess.HasExited) {
+                Start-Sleep -Seconds 5
+                $elapsed = [int]((Get-Date) - $startedAt).TotalSeconds
+                Write-Host "[Info] $Component dependencies are still installing ($elapsed seconds)..."
+            }
+            $pipProcess.WaitForExit()
             $pipExitCode = $pipProcess.ExitCode
             foreach ($pipLog in @($pipStdout, $pipStderr)) {
                 if (Test-Path -LiteralPath $pipLog) {
