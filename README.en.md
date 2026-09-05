@@ -139,7 +139,7 @@ The default watched directory is `%USERPROFILE%\Documents\QQChatExporter\live-ca
 ## Requirements
 
 - QQNT installed locally.
-- Python 3.10 or later for QCCA.
+- Python 3.10–3.12 for QCCA. The current FunASR/NumPy dependency set does not support Python 3.13 or later.
 - `ffmpeg` for AMR-to-WAV conversion.
 - At least one supported coding Agent CLI, authenticated locally: Codex CLI or Claude Code.
 - Node.js 18 or later for standalone mode only.

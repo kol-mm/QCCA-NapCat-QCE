@@ -219,18 +219,19 @@ if not exist "%QCCA_DIR%\qq_cloud_control_agent.py" (
     goto :qcca_done
 )
 
-rem Check that Python is available.
-where python >nul 2>&1
-if !errorLevel! neq 0 (
-    echo [Warning] Python not found, skipping QCCA.
-    echo [Info] Please install Python 3.10+ from https://www.python.org/
+rem Find a Python version supported by FunASR and its NumPy dependency.
+set "QCCA_SYSTEM_PYTHON="
+for /f "usebackq delims=" %%p in (`powershell -NoProfile -ExecutionPolicy Bypass -File "%QCCA_DIR%\find-python.ps1"`) do if not defined QCCA_SYSTEM_PYTHON set "QCCA_SYSTEM_PYTHON=%%p"
+if not defined QCCA_SYSTEM_PYTHON (
+    echo [Error] QCCA requires Python 3.10, 3.11, or 3.12. Python 3.13+ is not supported by the current audio dependencies.
+    echo [Info] Install Python 3.12 from https://www.python.org/downloads/release/python-31210/
     goto :qcca_done
 )
 
 rem Create the virtual environment when it is missing.
 if exist "%QCCA_VENV%\Scripts\python.exe" (
     rem A venv copied from another computer is not portable; validate it first.
-    "%QCCA_PYTHON%" -c "import encodings,sys" >nul 2>&1
+    "%QCCA_PYTHON%" -c "import encodings,sys; raise SystemExit(0 if (3,10) ^<= sys.version_info[:2] ^<= (3,12) else 1)" >nul 2>&1
     if !errorLevel! neq 0 (
         echo [Warning] Invalid or non-portable QCCA venv detected. Rebuilding...
         powershell -NoProfile -ExecutionPolicy Bypass -File "%QCCA_DIR%\stop-qcca.ps1" >nul 2>&1
@@ -240,15 +241,15 @@ if exist "%QCCA_VENV%\Scripts\python.exe" (
 if not exist "%QCCA_VENV%\Scripts\python.exe" (
     echo [Info] First launch detected. Initializing the QCCA environment...
     echo [Info] Creating Python virtual environment...
-    python -m venv --clear "%QCCA_VENV%"
+    "%QCCA_SYSTEM_PYTHON%" -m venv --clear "%QCCA_VENV%"
     if not exist "%QCCA_VENV%\Scripts\python.exe" (
         echo [Error] Failed to create virtual environment.
         goto :qcca_done
     )
     echo [Info] Virtual environment created at: %QCCA_VENV%
-    "%QCCA_PYTHON%" -c "import encodings,sys" >nul 2>&1
+    "%QCCA_PYTHON%" -c "import encodings,sys; raise SystemExit(0 if (3,10) ^<= sys.version_info[:2] ^<= (3,12) else 1)" >nul 2>&1
     if !errorLevel! neq 0 (
-        echo [Error] The new QCCA venv cannot start. Please verify Python 3.10+ is installed.
+        echo [Error] The new QCCA venv cannot start. Please verify Python 3.10-3.12 is installed.
         goto :qcca_done
     )
 )

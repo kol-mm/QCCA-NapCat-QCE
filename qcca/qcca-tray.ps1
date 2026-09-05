@@ -10,6 +10,7 @@ $qceUrl = "http://127.0.0.1:$qcePort"
 $qccaPageUrl = "$qccaUrl/qcca/"
 $stopScript = Join-Path $qccaDirectory "stop-qcca.ps1"
 $startScript = Join-Path $qccaDirectory "start-services.ps1"
+$findPythonScript = Join-Path $qccaDirectory "find-python.ps1"
 $pythonPath = Join-Path $qccaDirectory ".venv\Scripts\python.exe"
 $venvDirectory = Join-Path $qccaDirectory ".venv"
 $logDirectory = if ($env:QCE_LOG_DIR) { $env:QCE_LOG_DIR } else { Join-Path $rootDirectory "logs" }
@@ -36,7 +37,7 @@ function Ensure-PythonEnvironment {
     $env:PYTHONPATH = $null
     try {
         if (Test-Path -LiteralPath $pythonPath) {
-            & $pythonPath -c "import encodings,sys" *> $null
+            & $pythonPath -c "import encodings,sys; raise SystemExit(0 if (3,10) <= sys.version_info[:2] <= (3,12) else 1)" *> $null
             if ($LASTEXITCODE -eq 0) { return $true }
             [System.Windows.Forms.MessageBox]::Show(
                 "检测到旧的 QCCA 虚拟环境不可用，正在按当前电脑的 Python 重新创建。首次启动可能需要几分钟。",
@@ -44,18 +45,18 @@ function Ensure-PythonEnvironment {
             ) | Out-Null
         }
 
-        $systemPython = Get-Command python.exe -ErrorAction SilentlyContinue
+        $systemPython = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $findPythonScript | Select-Object -First 1
         if (-not $systemPython) {
-            throw "未找到 Python 3.10 或更高版本。"
+            throw "未找到兼容的 Python。QCCA 当前需要 Python 3.10、3.11 或 3.12；Python 3.13 及以上暂不支持语音依赖。"
         }
         if (Test-Path -LiteralPath $venvDirectory) {
             Remove-Item -LiteralPath $venvDirectory -Recurse -Force -ErrorAction SilentlyContinue
         }
-        & $systemPython.Source -m venv --clear $venvDirectory
+        & $systemPython -m venv --clear $venvDirectory
         if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $pythonPath)) {
             throw "无法创建 QCCA 虚拟环境。"
         }
-        & $pythonPath -c "import encodings,sys" *> $null
+        & $pythonPath -c "import encodings,sys; raise SystemExit(0 if (3,10) <= sys.version_info[:2] <= (3,12) else 1)" *> $null
         if ($LASTEXITCODE -ne 0) {
             throw "新建的 QCCA 虚拟环境无法启动。"
         }

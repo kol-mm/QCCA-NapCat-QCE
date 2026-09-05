@@ -163,12 +163,12 @@ QCCA API 文档的默认地址是 `http://127.0.0.1:40655/docs`，管理页面�
 ## 系统要求
 
 - 已安装 QQNT。启动器会自动同步本机 QQNT 版本信息。
-- Python 3.10 或更高版本，用于 QCCA。
+- Python 3.10–3.12，用于 QCCA。当前 FunASR/NumPy 依赖不支持 Python 3.13 及以上版本。
 - `ffmpeg`，用于将 AMR 语音转换为 WAV。
 - 至少安装并登录一个受支持的编码 Agent CLI：Codex CLI 或 Claude Code。
 - Node.js 18 或更高版本，仅独立模式需要。
 
-首次启动 QCCA 时，会在 `qcca\.venv` 创建虚拟环境并安装 Python 依赖。QCCA 使用的依赖包括 `watchdog`、`funasr`、`pysilk`、`torch`、`torchaudio`、`fastapi` 与 `uvicorn`。
+首次启动 QCCA 时，会自动寻找 Python 3.10–3.12，在 `qcca\.venv` 创建虚拟环境并安装 Python 依赖。QCCA 使用的依赖包括 `watchdog`、`funasr`、`pysilk`、`torch`、`torchaudio`、`fastapi` 与 `uvicorn`。
 
 Windows 发行包不会携带开发机的 `.venv`、模型缓存或个人配置。首次启动需要联网安装 Python 依赖，因此初始化时间取决于网络速度；后续启动会复用已创建的环境。
 
