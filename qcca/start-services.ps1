@@ -164,9 +164,59 @@ $apiErr = Initialize-LogFile $apiErr
 $agentOut = Initialize-LogFile $agentOut
 $agentErr = Initialize-LogFile $agentErr
 
+function Start-RedirectedProcess {
+    param(
+        [string]$FilePath,
+        [string[]]$Arguments,
+        [string]$WorkingDirectory,
+        [string]$OutputLog,
+        [string]$ErrorLog,
+        [switch]$Wait
+    )
+
+    # PowerShell Start-Process can throw when PATH and Path coexist in the
+    # inherited Windows environment. ProcessStartInfo starts the child
+    # without enumerating that environment, while retaining UTF-8 settings.
+    $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+    $startInfo.FileName = $FilePath
+    $startInfo.Arguments = (($Arguments | ForEach-Object {
+        '"' + ([string]$_).Replace('"', '\"') + '"'
+    }) -join ' ')
+    $startInfo.WorkingDirectory = $WorkingDirectory
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    $startInfo.StandardOutputEncoding = $utf8NoBom
+    $startInfo.StandardErrorEncoding = $utf8NoBom
+    $process = New-Object System.Diagnostics.Process
+    $process.StartInfo = $startInfo
+    if (-not $process.Start()) {
+        throw "无法启动进程：$FilePath"
+    }
+    $outputTask = $process.StandardOutput.ReadToEndAsync()
+    $errorTask = $process.StandardError.ReadToEndAsync()
+    if ($Wait) {
+        $process.WaitForExit()
+        [IO.File]::WriteAllText($OutputLog, $outputTask.Result, $utf8NoBom)
+        [IO.File]::WriteAllText($ErrorLog, $errorTask.Result, $utf8NoBom)
+    } else {
+        # Drain both redirected streams in background so the child cannot
+        # block when its output exceeds the pipe buffer.
+        Register-ObjectEvent -InputObject $process -EventName Exited -Action {
+            try {
+                [IO.File]::WriteAllText($Event.MessageData[0], $Event.MessageData[1].Result, $Event.MessageData[3])
+                [IO.File]::WriteAllText($Event.MessageData[2], $Event.MessageData[4].Result, $Event.MessageData[3])
+            } catch { }
+        } -MessageData @($OutputLog, $outputTask, $ErrorLog, $utf8NoBom, $errorTask) | Out-Null
+        $process.EnableRaisingEvents = $true
+    }
+    return $process
+}
+
 function Start-HiddenService {
     param([string[]]$Arguments, [string]$OutputLog, [string]$ErrorLog)
-    return Start-Process -FilePath $PythonPath -ArgumentList $Arguments -WorkingDirectory $QccaDirectory -WindowStyle Hidden -RedirectStandardOutput $OutputLog -RedirectStandardError $ErrorLog -PassThru
+    return Start-RedirectedProcess -FilePath $PythonPath -Arguments $Arguments -WorkingDirectory $QccaDirectory -OutputLog $OutputLog -ErrorLog $ErrorLog
 }
 
 function Save-ServicePid {
@@ -231,8 +281,8 @@ function Install-Requirements {
         $pipStdout = Join-Path $LogDirectory (".qcca-{0}-pip-{1}.out" -f $Component, $PID)
         $pipStderr = Join-Path $LogDirectory (".qcca-{0}-pip-{1}.err" -f $Component, $PID)
         try {
-            $pipProcess = Start-Process -FilePath $PythonPath -ArgumentList $pipArguments -WorkingDirectory $QccaDirectory `
-                -WindowStyle Hidden -RedirectStandardOutput $pipStdout -RedirectStandardError $pipStderr -Wait -PassThru
+            $pipProcess = Start-RedirectedProcess -FilePath $PythonPath -Arguments $pipArguments -WorkingDirectory $QccaDirectory `
+                -OutputLog $pipStdout -ErrorLog $pipStderr -Wait
             $pipExitCode = $pipProcess.ExitCode
             foreach ($pipLog in @($pipStdout, $pipStderr)) {
                 if (Test-Path -LiteralPath $pipLog) {

@@ -1,4 +1,4 @@
-@echo off
+﻿@echo off
 chcp 65001 > nul
 title QCE 独立模式
 cd /d "%~dp0"

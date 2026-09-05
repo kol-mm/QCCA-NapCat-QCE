@@ -1,4 +1,4 @@
-@echo off
+﻿@echo off
 chcp 65001 >nul
 setlocal enabledelayedexpansion
 cd /d "%~dp0"
@@ -184,21 +184,21 @@ echo.
 set NAPCAT_MAIN_PATH=%NAPCAT_MAIN_PATH:\=/%
 echo (async () =^> {await import("file:///%NAPCAT_MAIN_PATH%")})() > "%NAPCAT_LOAD_PATH%"
 
-rem 回退：部分新版 QQNT 的注入 hook 不再重定向 loadNapCat.js 的读取，
-rem 物理复制一份到 QQ 的 resources\app 目录，避免 "Cannot find module ... loadNapCat.js"。
+rem Fallback for QQNT builds that do not redirect loadNapCat.js loading.
+rem Copy the loader into QQ resources\app to avoid module-not-found errors.
 if not "!QQPackageJson!"=="" (
     for %%f in ("!QQPackageJson!") do copy /y "%NAPCAT_LOAD_PATH%" "%%~dpfloadNapCat.js" >nul 2>&1
 )
 
 rem ============================================================
-rem QCCA - QQ Cloud Control Agent 启动
-rem 使用虚拟环境 .venv，国内镜像安装依赖，在新窗口启动 agent
+rem QCCA - QQ Cloud Control Agent startup
+rem Use the local .venv and install dependencies on first launch.
 rem ============================================================
 echo.
 echo ============================================
 echo   QCCA - QQ Cloud Control Agent
 echo ============================================
-echo [Info] 首次启动需要安装 Python 依赖并加载语音模型, 可能需要几分钟, 请不要关闭此窗口.
+echo [Info] First launch installs Python dependencies and loads the audio model. This may take a few minutes.
 
 set "QCCA_DIR=%cd%\qcca"
 set "QCCA_VENV=%QCCA_DIR%\.venv"
@@ -213,13 +213,13 @@ rem Prevent a system-wide Python installation from contaminating the venv.
 set "PYTHONHOME="
 set "PYTHONPATH="
 
-rem 检查 QCCA 模块是否存在
+rem Check that the QCCA module exists.
 if not exist "%QCCA_DIR%\qq_cloud_control_agent.py" (
     echo [Warning] QCCA module not found, skipping.
     goto :qcca_done
 )
 
-rem 检查 Python 是否可用
+rem Check that Python is available.
 where python >nul 2>&1
 if !errorLevel! neq 0 (
     echo [Warning] Python not found, skipping QCCA.
@@ -227,18 +227,18 @@ if !errorLevel! neq 0 (
     goto :qcca_done
 )
 
-rem 创建虚拟环境（如果不存在）
+rem Create the virtual environment when it is missing.
 if exist "%QCCA_VENV%\Scripts\python.exe" (
-    rem 发行包不能复用另一台电脑生成的虚拟环境，先验证解释器是否可迁移。
+    rem A venv copied from another computer is not portable; validate it first.
     "%QCCA_PYTHON%" -c "import encodings,sys" >nul 2>&1
     if !errorLevel! neq 0 (
-        echo [Warning] 检测到损坏或不可迁移的 QCCA 虚拟环境, 正在重建...
+        echo [Warning] Invalid or non-portable QCCA venv detected. Rebuilding...
         powershell -NoProfile -ExecutionPolicy Bypass -File "%QCCA_DIR%\stop-qcca.ps1" >nul 2>&1
         rmdir /s /q "%QCCA_VENV%" >nul 2>&1
     )
 )
 if not exist "%QCCA_VENV%\Scripts\python.exe" (
-    echo [Info] 检测到首次启动, 正在初始化 QCCA 运行环境...
+    echo [Info] First launch detected. Initializing the QCCA environment...
     echo [Info] Creating Python virtual environment...
     python -m venv --clear "%QCCA_VENV%"
     if not exist "%QCCA_VENV%\Scripts\python.exe" (
@@ -248,7 +248,7 @@ if not exist "%QCCA_VENV%\Scripts\python.exe" (
     echo [Info] Virtual environment created at: %QCCA_VENV%
     "%QCCA_PYTHON%" -c "import encodings,sys" >nul 2>&1
     if !errorLevel! neq 0 (
-        echo [Error] 新建的 QCCA 虚拟环境无法启动，请确认 Python 3.10+ 安装完整。
+        echo [Error] The new QCCA venv cannot start. Please verify Python 3.10+ is installed.
         goto :qcca_done
     )
 )
@@ -271,7 +271,7 @@ if exist "%QCCA_DIR%\qcca-tray.ps1" (
 )
 echo ============================================
 rem ============================================================
-rem QCCA 启动结束
+rem QCCA startup complete.
 rem ============================================================
 
 echo.
