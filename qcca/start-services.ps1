@@ -65,6 +65,16 @@ function Initialize-LogFile {
     }
 }
 
+function Write-Diagnostic {
+    param([string]$Path, [string]$Message)
+    try {
+        [IO.File]::AppendAllText($Path, $Message + [Environment]::NewLine, $utf8NoBom)
+    } catch {
+        Write-Host "[Warning] Could not write diagnostic log: $Path"
+        Write-Host $Message
+    }
+}
+
 function Stop-ExistingQccaProcesses {
     # A forced console close can leave either service alive without a PID file.
     # Stop only Python processes launched from this QCCA virtualenv so an
@@ -205,7 +215,7 @@ function Test-PythonImports {
         $ErrorActionPreference = $previousErrorAction
     }
     if ($exitCode -ne 0 -and $ErrorLog -and $importOutput.Count -gt 0) {
-        Add-Content -LiteralPath $ErrorLog -Value ("[Python import check] " + (($importOutput | ForEach-Object { [string]$_ }) -join "`n")) -Encoding UTF8
+        Write-Diagnostic $ErrorLog ("[Python import check] " + (($importOutput | ForEach-Object { [string]$_ }) -join "`n"))
     }
     return ($exitCode -eq 0)
 }
@@ -220,7 +230,7 @@ function Install-Requirements {
     Set-Content -LiteralPath $ErrorLog -Value "[$Component] Python dependencies are missing; starting installation." -Encoding UTF8
 
     foreach ($mirror in $mirrors) {
-        Add-Content -LiteralPath $ErrorLog -Value "[$Component] Trying package index: $mirror"
+        Write-Diagnostic $ErrorLog "[$Component] Trying package index: $mirror"
         $pipArguments = @(
             "-m", "pip", "install", "--disable-pip-version-check", "--no-input",
             "--retries", "2", "--timeout", "30", "-i", $mirror,
@@ -241,20 +251,20 @@ function Install-Requirements {
             foreach ($pipLog in @($pipStdout, $pipStderr)) {
                 if (Test-Path -LiteralPath $pipLog) {
                     $text = [IO.File]::ReadAllText($pipLog, [Text.Encoding]::UTF8)
-                    if ($text) { Add-Content -LiteralPath $ErrorLog -Value $text -Encoding UTF8 }
+                    if ($text) { Write-Diagnostic $ErrorLog $text }
                 }
             }
         } finally {
             Remove-Item -LiteralPath $pipStdout, $pipStderr -Force -ErrorAction SilentlyContinue
         }
         if ($pipExitCode -eq 0) {
-            Add-Content -LiteralPath $ErrorLog -Value "[$Component] Dependencies installed successfully."
+            Write-Diagnostic $ErrorLog "[$Component] Dependencies installed successfully."
             return $true
         }
-        Add-Content -LiteralPath $ErrorLog -Value "[$Component] Package index failed with exit code $pipExitCode."
+        Write-Diagnostic $ErrorLog "[$Component] Package index failed with exit code $pipExitCode."
     }
 
-    Add-Content -LiteralPath $ErrorLog -Value "[$Component] All package indexes failed. Check network access and the full log above."
+    Write-Diagnostic $ErrorLog "[$Component] All package indexes failed. Check network access and the full log above."
     return $false
 }
 
@@ -269,7 +279,7 @@ if (-not (Test-PythonImports @("fastapi", "uvicorn") $apiErr)) {
         exit 1
     }
     if (-not (Test-PythonImports @("fastapi", "uvicorn") $apiErr)) {
-        Add-Content -LiteralPath $apiErr -Value "[API] Dependencies were installed, but fastapi/uvicorn still cannot be imported."
+        Write-Diagnostic $apiErr "[API] Dependencies were installed, but fastapi/uvicorn still cannot be imported."
         Get-Content -LiteralPath $apiErr -Tail 25 | ForEach-Object { Write-Host $_ }
         exit 1
     }
@@ -283,8 +293,7 @@ for ($attempt = 0; $attempt -lt 20; $attempt++) {
     try {
         $apiProcess.Refresh()
         if ($apiProcess.HasExited) { break }
-        $apiListener = @(Get-NetTCPConnection -State Listen -LocalAddress "127.0.0.1" -LocalPort $Port -ErrorAction SilentlyContinue |
-            Where-Object { $_.OwningProcess -eq $apiProcess.Id })
+        $apiListener = @(Get-NetTCPConnection -State Listen -LocalAddress "127.0.0.1" -LocalPort $Port -ErrorAction SilentlyContinue)
         if ($apiListener.Count -eq 0) {
             Start-Sleep -Milliseconds 250
             continue
@@ -295,7 +304,7 @@ for ($attempt = 0; $attempt -lt 20; $attempt++) {
     Start-Sleep -Milliseconds 250
 }
 if (-not $apiReady) {
-    Add-Content -LiteralPath $apiErr -Value "QCCA API health check failed: $healthUrl"
+        Write-Diagnostic $apiErr "QCCA API health check failed: $healthUrl"
     Stop-StartedService $apiProcess "api"
     $env:PYTHONUTF8 = $previousPythonUtf8
     exit 1
@@ -303,14 +312,14 @@ if (-not $apiReady) {
 
 if (-not (Test-PythonImports @("watchdog", "funasr", "pysilk", "torch", "torchaudio", "requests") $agentErr)) {
     if (-not (Install-Requirements (Join-Path $QccaDirectory "requirements.txt") $agentErr "Agent")) {
-        Add-Content -LiteralPath $agentErr -Value "[Agent] Agent dependencies failed to install; Agent was not started."
+        Write-Diagnostic $agentErr "[Agent] Agent dependencies failed to install; Agent was not started."
         Get-Content -LiteralPath $agentErr -Tail 25 | ForEach-Object { Write-Host $_ }
         Stop-StartedService $apiProcess "api"
         $env:PYTHONUTF8 = $previousPythonUtf8
         exit 1
     }
     if (-not (Test-PythonImports @("watchdog", "funasr", "pysilk", "torch", "torchaudio", "requests") $agentErr)) {
-        Add-Content -LiteralPath $agentErr -Value "[Agent] Dependencies were installed, but one or more Agent modules still cannot be imported."
+        Write-Diagnostic $agentErr "[Agent] Dependencies were installed, but one or more Agent modules still cannot be imported."
         Get-Content -LiteralPath $agentErr -Tail 25 | ForEach-Object { Write-Host $_ }
         Stop-StartedService $apiProcess "api"
         $env:PYTHONUTF8 = $previousPythonUtf8
@@ -325,14 +334,14 @@ try {
     Start-Sleep -Milliseconds 750
     $agentProcess.Refresh()
     if ($agentProcess.HasExited) {
-        Add-Content -LiteralPath $agentErr -Value "[Agent] Agent exited during startup with code $($agentProcess.ExitCode)."
+        Write-Diagnostic $agentErr "[Agent] Agent exited during startup with code $($agentProcess.ExitCode)."
         Stop-StartedService $agentProcess "agent"
         Stop-StartedService $apiProcess "api"
         $env:PYTHONUTF8 = $previousPythonUtf8
         exit 1
     }
 } catch {
-    Add-Content -LiteralPath $agentErr -Value "[Agent] Failed to start Agent: $($_.Exception.Message)"
+    Write-Diagnostic $agentErr "[Agent] Failed to start Agent: $($_.Exception.Message)"
     Stop-StartedService $apiProcess "api"
     $env:PYTHONUTF8 = $previousPythonUtf8
     exit 1
