@@ -231,7 +231,7 @@ if not defined QCCA_SYSTEM_PYTHON (
 rem Create the virtual environment when it is missing.
 if exist "%QCCA_VENV%\Scripts\python.exe" (
     rem A venv copied from another computer is not portable; validate it first.
-    "%QCCA_PYTHON%" -c "import encodings,sys; raise SystemExit(0 if (3,10) ^<= sys.version_info[:2] ^<= (3,12) else 1)" >nul 2>&1
+    "%QCCA_PYTHON%" -c "import encodings,sys; raise SystemExit(0 if sys.version_info[:2] in ((3,10),(3,11),(3,12)) else 1)" >nul 2>&1
     if !errorLevel! neq 0 (
         echo [Warning] Invalid or non-portable QCCA venv detected. Rebuilding...
         powershell -NoProfile -ExecutionPolicy Bypass -File "%QCCA_DIR%\stop-qcca.ps1" >nul 2>&1
@@ -247,7 +247,7 @@ if not exist "%QCCA_VENV%\Scripts\python.exe" (
         goto :qcca_done
     )
     echo [Info] Virtual environment created at: %QCCA_VENV%
-    "%QCCA_PYTHON%" -c "import encodings,sys; raise SystemExit(0 if (3,10) ^<= sys.version_info[:2] ^<= (3,12) else 1)" >nul 2>&1
+    "%QCCA_PYTHON%" -c "import encodings,sys; raise SystemExit(0 if sys.version_info[:2] in ((3,10),(3,11),(3,12)) else 1)" >nul 2>&1
     if !errorLevel! neq 0 (
         echo [Error] The new QCCA venv cannot start. Please verify Python 3.10-3.12 is installed.
         goto :qcca_done
