@@ -1,5 +1,15 @@
 $ErrorActionPreference = "SilentlyContinue"
 
+$versionFile = Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) "python-version.txt"
+$requiredVersion = if (Test-Path -LiteralPath $versionFile) {
+    (Get-Content -LiteralPath $versionFile -TotalCount 1).Trim()
+} else { "3.12" }
+if ($requiredVersion -notmatch '^\d+\.\d+$') { exit 1 }
+$versionParts = $requiredVersion.Split('.')
+$requiredMajor = [int]$versionParts[0]
+$requiredMinor = [int]$versionParts[1]
+$versionCheck = "import sys; raise SystemExit(0 if sys.version_info[:2] == ($requiredMajor,$requiredMinor) else 1)"
+
 $candidates = New-Object System.Collections.Generic.List[string]
 
 function Add-Candidate([string]$Path) {
@@ -10,7 +20,7 @@ function Add-Candidate([string]$Path) {
     }
 }
 
-foreach ($version in @("3.12", "3.11", "3.10")) {
+foreach ($version in @($requiredVersion)) {
     $launcher = Get-Command py.exe -ErrorAction SilentlyContinue
     if ($launcher) {
         $resolved = & $launcher.Source "-$version" -c "import sys; print(sys.executable)" 2>$null
@@ -20,7 +30,7 @@ foreach ($version in @("3.12", "3.11", "3.10")) {
 
 $uv = Get-Command uv.exe -ErrorAction SilentlyContinue
 if ($uv) {
-    foreach ($version in @("3.12", "3.11", "3.10")) {
+    foreach ($version in @($requiredVersion)) {
         $resolved = & $uv.Source python find $version 2>$null
         if ($LASTEXITCODE -eq 0) { Add-Candidate ([string]$resolved) }
     }
@@ -33,9 +43,7 @@ foreach ($command in @(Get-Command python.exe -All -ErrorAction SilentlyContinue
 foreach ($base in @(
     (Join-Path $env:LOCALAPPDATA "Programs\Python"),
     "C:\Program Files\Python",
-    "C:\Python312",
-    "C:\Python311",
-    "C:\Python310"
+    "C:\Python312"
 )) {
     if (-not $base -or -not (Test-Path -LiteralPath $base)) { continue }
     if ($base -match 'Python3\d\d$') {
@@ -47,7 +55,7 @@ foreach ($base in @(
 }
 
 foreach ($candidate in $candidates) {
-    & $candidate -c "import sys; raise SystemExit(0 if (3, 10) <= sys.version_info[:2] <= (3, 12) else 1)" 2>$null
+    & $candidate -c $versionCheck 2>$null
     if ($LASTEXITCODE -eq 0) {
         Write-Output $candidate
         exit 0

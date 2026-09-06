@@ -99,6 +99,8 @@ def is_sandbox_command(text: str) -> bool:
     body = text[1:].strip()
     if not body:
         return False
+    if body.count('"') % 2:
+        return False
     # A quoted workspace may contain spaces; validate the complete command
     # against the same token grammar used by parse_sandbox_params.
     if not re.fullmatch(r'(?:workspace|session|sandbox|agent)=(?:"[^"]*"|\S+)(?:\s+(?:workspace|session|sandbox|agent)=(?:"[^"]*"|\S+))*', body):

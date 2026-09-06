@@ -11,10 +11,19 @@ $qccaPageUrl = "$qccaUrl/qcca/"
 $stopScript = Join-Path $qccaDirectory "stop-qcca.ps1"
 $startScript = Join-Path $qccaDirectory "start-services.ps1"
 $findPythonScript = Join-Path $qccaDirectory "find-python.ps1"
+$pythonVersionFile = Join-Path $qccaDirectory "python-version.txt"
 $pythonPath = Join-Path $qccaDirectory ".venv\Scripts\python.exe"
 $venvDirectory = Join-Path $qccaDirectory ".venv"
 $logDirectory = if ($env:QCE_LOG_DIR) { $env:QCE_LOG_DIR } else { Join-Path $rootDirectory "logs" }
 $iconPath = Join-Path $qccaDirectory "qcca-app-icon.ico"
+$requiredPythonVersion = if (Test-Path -LiteralPath $pythonVersionFile) {
+    (Get-Content -LiteralPath $pythonVersionFile -TotalCount 1).Trim()
+} else { "3.12" }
+if ($requiredPythonVersion -notmatch '^(\d+)\.(\d+)$') { $requiredPythonVersion = "3.12" }
+$requiredPythonParts = $requiredPythonVersion.Split('.')
+$requiredPythonMajor = [int]$requiredPythonParts[0]
+$requiredPythonMinor = [int]$requiredPythonParts[1]
+$pythonVersionCheck = "import encodings,sys; raise SystemExit(0 if sys.version_info[:2] == ($requiredPythonMajor,$requiredPythonMinor) else 1)"
 
 $notifyIcon = New-Object System.Windows.Forms.NotifyIcon
 $notifyIcon.Icon = if (Test-Path -LiteralPath $iconPath) {
@@ -37,17 +46,17 @@ function Ensure-PythonEnvironment {
     $env:PYTHONPATH = $null
     try {
         if (Test-Path -LiteralPath $pythonPath) {
-            & $pythonPath -c "import encodings,sys; raise SystemExit(0 if (3,10) <= sys.version_info[:2] <= (3,12) else 1)" *> $null
+            & $pythonPath -c $pythonVersionCheck *> $null
             if ($LASTEXITCODE -eq 0) { return $true }
             [System.Windows.Forms.MessageBox]::Show(
-                "检测到旧的 QCCA 虚拟环境不可用，正在按当前电脑的 Python 重新创建。首次启动可能需要几分钟。",
+                "检测到旧的 QCCA 虚拟环境不可用，正在按 Python $requiredPythonVersion 重新创建。首次启动可能需要几分钟。",
                 "QCCA"
             ) | Out-Null
         }
 
         $systemPython = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $findPythonScript | Select-Object -First 1
         if (-not $systemPython) {
-            throw "未找到兼容的 Python。QCCA 当前需要 Python 3.10、3.11 或 3.12；Python 3.13 及以上暂不支持语音依赖。"
+            throw "未找到兼容的 Python。QCCA 当前需要 Python $requiredPythonVersion；请安装对应的 64 位 Python。"
         }
         if (Test-Path -LiteralPath $venvDirectory) {
             Remove-Item -LiteralPath $venvDirectory -Recurse -Force -ErrorAction SilentlyContinue
@@ -56,7 +65,7 @@ function Ensure-PythonEnvironment {
         if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $pythonPath)) {
             throw "无法创建 QCCA 虚拟环境。"
         }
-        & $pythonPath -c "import encodings,sys; raise SystemExit(0 if (3,10) <= sys.version_info[:2] <= (3,12) else 1)" *> $null
+        & $pythonPath -c $pythonVersionCheck *> $null
         if ($LASTEXITCODE -ne 0) {
             throw "新建的 QCCA 虚拟环境无法启动。"
         }

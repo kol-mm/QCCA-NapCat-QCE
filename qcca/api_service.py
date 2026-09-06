@@ -293,11 +293,11 @@ def _system_status() -> dict:
     except HTTPException as exc:
         services.append(_service("smtp", "QQ 邮箱回复", "warning", "邮箱配置无法读取", str(exc.detail), required=False))
 
-    python_ready = (3, 10) <= sys.version_info[:2] <= (3, 12)
+    python_ready = sys.version_info[:2] == (3, 12)
     services.append(_service(
         "python", "Python 环境", "ready" if python_ready else "error",
         f"Python {sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
-        "请安装 Python 3.10、3.11 或 3.12；当前语音依赖不支持 Python 3.13 及以上版本" if not python_ready else "",
+        "请安装 64 位 Python 3.12；当前依赖基线固定为 Python 3.12" if not python_ready else "",
     ))
     ffmpeg_path = shutil.which("ffmpeg")
     services.append(_service(

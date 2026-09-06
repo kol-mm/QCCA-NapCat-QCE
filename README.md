@@ -8,7 +8,7 @@
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 [![Platform: Windows x64](https://img.shields.io/badge/Platform-Windows%20x64-0078D4.svg)](#系统要求)
-[![Python: 3.10+](https://img.shields.io/badge/Python-3.10%2B-3776AB.svg)](#系统要求)
+[![Python: 3.12](https://img.shields.io/badge/Python-3.12-3776AB.svg)](#系统要求)
 
 **语言 / Language:** [中文](README.md) | [English](README.en.md)
 
@@ -163,14 +163,16 @@ QCCA API 文档的默认地址是 `http://127.0.0.1:40655/docs`，管理页面�
 ## 系统要求
 
 - 已安装 QQNT。启动器会自动同步本机 QQNT 版本信息。
-- Python 3.10–3.12，用于 QCCA。当前 FunASR/NumPy 依赖不支持 Python 3.13 及以上版本。
+- 64 位 Python 3.12，用于 QCCA。运行时和依赖版本已固定，Python 3.13 及以上版本不受支持。
 - `ffmpeg`，用于将 AMR 语音转换为 WAV。
 - 至少安装并登录一个受支持的编码 Agent CLI：Codex CLI 或 Claude Code。
 - Node.js 18 或更高版本，仅独立模式需要。
 
-首次启动 QCCA 时，会自动寻找 Python 3.10–3.12，在 `qcca\.venv` 创建虚拟环境并安装 Python 依赖。QCCA 使用的依赖包括 `watchdog`、`funasr`、`pysilk`、`torch`、`torchaudio`、`fastapi` 与 `uvicorn`。
+首次启动 QCCA 时，会自动寻找 Python 3.12，在 `qcca\.venv` 创建虚拟环境并安装锁定版本的 Python 依赖。依赖清单位于 `qcca\requirements.txt` 和 `qcca\api-requirements.txt`，其中 Torch 与 Torchaudio 使用匹配版本，NumPy 固定为 1.26.4。
 
 Windows 发行包不会携带开发机的 `.venv`、模型缓存或个人配置。首次启动需要联网安装 Python 依赖，因此初始化时间取决于网络速度；后续启动会复用已创建的环境。
+
+启动完成后，QCCA 会自动检查 API、Agent 进程、音频模型、FFmpeg 和编码 Agent CLI。API 或 Agent 进程检查失败会终止本次启动；自检结果写入 `logs\qcca-startup.log`，服务自身的错误输出仍保留在 `logs\qcca-*.log.err`。音频模型仍在加载、未安装 FFmpeg 或暂未配置 CLI 时会显示为警告，管理页面会给出对应处理建议。
 
 不要从其他电脑复制 `qcca\\.venv`。虚拟环境会记录创建它的 Python 安装路径；如果路径失效，启动器会检测到并自动重建环境。
 
@@ -188,7 +190,7 @@ Windows 发行包不会携带开发机的 `.venv`、模型缓存或个人配置�
 .venv\Scripts\pip install -r requirements.txt
 ```
 
-如果日志出现 `No module named encodings`，说明现有 `.venv` 已损坏或来自另一台电脑。关闭 QCCA 后删除 `qcca\\.venv`，再运行启动器即可自动创建新的环境。
+如果日志出现 `No module named encodings`，说明现有 `.venv` 已损坏或来自另一台电脑。关闭 QCCA 后删除 `qcca\\.venv`，再运行启动器即可自动创建新的环境。若提示找不到 Python，请安装 64 位 Python 3.12 并重新启动。
 
 ### QCCA 管理页面无法打开
 
@@ -196,6 +198,14 @@ Windows 发行包不会携带开发机的 `.venv`、模型缓存或个人配置�
 
 ```text
 http://localhost:40655/qcca/
+```
+
+### 运行本地回归测试
+
+测试不需要启动 QQ、NapCat 或 QCCA 服务。在项目根目录执行：
+
+```powershell
+python -m unittest discover -s qcca/tests -v
 ```
 
 ### 语音识别失败

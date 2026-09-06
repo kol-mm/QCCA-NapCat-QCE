@@ -1,2 +1,3 @@
-fastapi>=0.110,<0.116
-uvicorn[standard]>=0.27,<0.34
+# QCCA Python baseline: CPython 3.12.x
+fastapi==0.115.6
+uvicorn[standard]==0.33.0

@@ -1,8 +1,12 @@
-watchdog
-requests
-funasr
-silk-python
-torch
-torchaudio
-fastapi>=0.110,<0.116
-uvicorn[standard]>=0.27,<0.34
+# QCCA Python baseline: CPython 3.12.x
+# Keep torch and torchaudio on the same release line. NumPy 2.x is not
+# supported by the current FunASR stack.
+watchdog==6.0.0
+requests==2.32.3
+funasr==1.4.14
+silk-python==0.2.8
+torch==2.11.0
+torchaudio==2.11.0
+numpy==1.26.4
+fastapi==0.115.6
+uvicorn[standard]==0.33.0

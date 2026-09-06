@@ -8,7 +8,7 @@
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 [![Platform: Windows x64](https://img.shields.io/badge/Platform-Windows%20x64-0078D4.svg)](#requirements)
-[![Python: 3.10+](https://img.shields.io/badge/Python-3.10%2B-3776AB.svg)](#requirements)
+[![Python: 3.12](https://img.shields.io/badge/Python-3.12-3776AB.svg)](#requirements)
 
 **Language:** [中文](README.md) | [English](README.en.md)
 
@@ -139,16 +139,26 @@ The default watched directory is `%USERPROFILE%\Documents\QQChatExporter\live-ca
 ## Requirements
 
 - QQNT installed locally.
-- Python 3.10–3.12 for QCCA. The current FunASR/NumPy dependency set does not support Python 3.13 or later.
+- 64-bit Python 3.12 for QCCA. The runtime and dependency versions are pinned; Python 3.13 and later are not supported.
 - `ffmpeg` for AMR-to-WAV conversion.
 - At least one supported coding Agent CLI, authenticated locally: Codex CLI or Claude Code.
 - Node.js 18 or later for standalone mode only.
 
-The Windows release does not include the development machine's `.venv`, model cache, or personal configuration. On first launch, QCCA downloads its Python dependencies and reuses that environment on later starts.
+The Windows release does not include the development machine's `.venv`, model cache, or personal configuration. On first launch, QCCA downloads the pinned Python dependencies into `qcca\\.venv` and reuses that environment on later starts. Torch and Torchaudio are kept on the same release line, and NumPy is pinned to 1.26.4.
+
+After startup, QCCA checks the API, Agent process, audio model, FFmpeg, and supported Agent CLIs. A failed API or Agent-process check aborts that launch; self-check results are written to `logs\\qcca-startup.log`, while service stderr remains in `logs\\qcca-*.log.err`. A model that is still loading, missing FFmpeg, or a missing CLI is reported as a warning; the management page shows the next action.
 
 ### Claude is signed in but requests fail
 
 Run `claude auth status`, then test `claude --print "Hello"` directly. A cached login does not guarantee that the Claude API is reachable. CC Switch is optional; only when you choose to use CC Switch or another proxy must its selected route be running. In every case, verify that Claude Code can return a result before using it through QCCA.
+
+### Run local regression tests
+
+The tests do not start QQ, NapCat, or QCCA services. From the project root, run:
+
+```powershell
+python -m unittest discover -s qcca/tests -v
+```
 
 ## Credits and License
 

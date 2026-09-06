@@ -176,6 +176,22 @@ $apiOut = Initialize-LogFile $apiOut
 $apiErr = Initialize-LogFile $apiErr
 $agentOut = Initialize-LogFile $agentOut
 $agentErr = Initialize-LogFile $agentErr
+$startupLog = Initialize-LogFile (Join-Path $LogDirectory "qcca-startup.log")
+
+# Keep direct invocations subject to the same runtime policy as the tray.
+# This prevents a manually selected Python 3.13+ from creating a broken venv
+# before the dependency installer gets a chance to report a useful error.
+$pythonVersionFile = Join-Path $QccaDirectory "python-version.txt"
+$requiredPythonVersion = if (Test-Path -LiteralPath $pythonVersionFile) {
+    (Get-Content -LiteralPath $pythonVersionFile -TotalCount 1).Trim()
+} else { "3.12" }
+if ($requiredPythonVersion -notmatch '^(\d+)\.(\d+)$') { $requiredPythonVersion = "3.12" }
+$pythonVersionOutput = @(& $PythonPath -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>&1)
+if ($LASTEXITCODE -ne 0 -or (($pythonVersionOutput -join "").Trim() -ne $requiredPythonVersion)) {
+    Write-Diagnostic $apiErr "[Runtime] Python $requiredPythonVersion is required, but the selected interpreter is not compatible: $(($pythonVersionOutput -join ' ').Trim())"
+    Write-Host "[Error] QCCA requires Python $requiredPythonVersion. The selected interpreter is not compatible."
+    exit 1
+}
 
 function Start-HiddenService {
     param([string[]]$Arguments, [string]$OutputLog, [string]$ErrorLog)
@@ -218,6 +234,22 @@ function Test-PythonImports {
         Write-Diagnostic $ErrorLog ("[Python import check] " + (($importOutput | ForEach-Object { [string]$_ }) -join "`n"))
     }
     return ($exitCode -eq 0)
+}
+
+function Get-QccaJson {
+    param([string]$Url)
+    try {
+        $response = Invoke-WebRequest -Uri $Url -UseBasicParsing -TimeoutSec 2
+        if ($response.StatusCode -ne 200) { return $null }
+        return ($response.Content | ConvertFrom-Json)
+    } catch {
+        return $null
+    }
+}
+
+function Test-CommandAvailable {
+    param([string]$Name)
+    return [bool](Get-Command -Name $Name -ErrorAction SilentlyContinue)
 }
 
 function Install-Requirements {
@@ -294,6 +326,7 @@ if (-not (Test-PythonImports @("fastapi", "uvicorn") $apiErr)) {
 
 $apiProcess = Start-HiddenService @("-m", "uvicorn", "api_service:app", "--host", "127.0.0.1", "--port", [string]$Port) $apiOut $apiErr
 Save-ServicePid $apiProcess "api"
+$qccaBaseUrl = "http://127.0.0.1:$Port"
 $healthUrl = "http://127.0.0.1:$Port/health"
 $apiReady = $false
 for ($attempt = 0; $attempt -lt 20; $attempt++) {
@@ -311,11 +344,13 @@ for ($attempt = 0; $attempt -lt 20; $attempt++) {
     Start-Sleep -Milliseconds 250
 }
 if (-not $apiReady) {
-        Write-Diagnostic $apiErr "QCCA API health check failed: $healthUrl"
+    Write-Diagnostic $startupLog "[Self-check] QCCA API health check failed: $healthUrl"
     Stop-StartedService $apiProcess "api"
     $env:PYTHONUTF8 = $previousPythonUtf8
     exit 1
 }
+Write-Host "[Info] QCCA API self-check passed."
+Write-Diagnostic $startupLog "[Self-check] QCCA API is healthy: $healthUrl"
 
 if (-not (Test-PythonImports @("watchdog", "funasr", "pysilk", "torch", "torchaudio", "requests") $agentErr)) {
     if (-not (Install-Requirements (Join-Path $QccaDirectory "requirements.txt") $agentErr "Agent")) {
@@ -338,20 +373,85 @@ try {
     $agentProcess = Start-HiddenService @("-u", "qq_cloud_control_agent.py") $agentOut $agentErr
     Save-ServicePid $agentProcess "agent"
     # Catch immediate import/startup failures instead of reporting a false success.
-    Start-Sleep -Milliseconds 750
+    # The Agent publishes idle/running after its listener and status files are
+    # ready. A short bounded wait avoids both false success and an apparent hang.
+    $agentReady = $false
+    for ($attempt = 0; $attempt -lt 20; $attempt++) {
+        $agentProcess.Refresh()
+        if ($agentProcess.HasExited) { break }
+        $agentStatus = Get-QccaJson "$qccaBaseUrl/qcca/agent-status"
+        if ($agentStatus -and $agentStatus.status -in @("idle", "running")) {
+            $agentReady = $true
+            break
+        }
+        Start-Sleep -Milliseconds 250
+    }
     $agentProcess.Refresh()
     if ($agentProcess.HasExited) {
-        Write-Diagnostic $agentErr "[Agent] Agent exited during startup with code $($agentProcess.ExitCode)."
+        Write-Diagnostic $startupLog "[Agent] Agent exited during startup with code $($agentProcess.ExitCode)."
         Stop-StartedService $agentProcess "agent"
         Stop-StartedService $apiProcess "api"
         $env:PYTHONUTF8 = $previousPythonUtf8
         exit 1
     }
+    if ($agentReady) {
+        Write-Host "[Info] QCCA Agent self-check passed."
+        Write-Diagnostic $startupLog "[Self-check] QCCA Agent is alive and reporting status."
+    } else {
+        Write-Host "[Warning] QCCA Agent is running but has not reported ready status yet."
+        Write-Diagnostic $startupLog "[Self-check] Agent process is alive, but no idle/running status arrived within 5 seconds."
+    }
 } catch {
-    Write-Diagnostic $agentErr "[Agent] Failed to start Agent: $($_.Exception.Message)"
+    Write-Diagnostic $startupLog "[Agent] Failed to start Agent: $($_.Exception.Message)"
     Stop-StartedService $apiProcess "api"
     $env:PYTHONUTF8 = $previousPythonUtf8
     exit 1
+}
+
+# These checks are intentionally non-blocking: text commands can work without
+# FFmpeg or a loaded audio model, while the management page exposes the exact
+# warning and the Agent continues loading the model in the background.
+$availableCli = @("codex", "claude") | Where-Object { Test-CommandAvailable $_ }
+if ($availableCli.Count -eq 0) {
+    Write-Host "[Warning] No supported Agent CLI (codex or claude) was found in PATH."
+    Write-Diagnostic $startupLog "[Self-check] No supported Agent CLI found in PATH; install and authenticate Codex CLI or Claude Code."
+} else {
+    Write-Host "[Info] Agent CLI self-check passed: $($availableCli -join ', ')."
+    Write-Diagnostic $startupLog "[Self-check] Available Agent CLI: $($availableCli -join ', ')."
+}
+
+$ffmpegCommand = Get-Command ffmpeg.exe -ErrorAction SilentlyContinue
+if ($ffmpegCommand) {
+    Write-Host "[Info] FFmpeg self-check passed: $($ffmpegCommand.Source)"
+    Write-Diagnostic $startupLog "[Self-check] FFmpeg found at $($ffmpegCommand.Source)."
+} else {
+    Write-Host "[Warning] FFmpeg was not found. Voice conversion will remain unavailable until it is installed."
+    Write-Diagnostic $startupLog "[Self-check] FFmpeg not found in PATH; voice conversion is unavailable."
+}
+
+$audioStatus = Get-QccaJson "$qccaBaseUrl/qcca/audio-model-status"
+if ($audioStatus -and $audioStatus.status -eq "ready") {
+    Write-Host "[Info] Audio model self-check passed."
+} elseif ($audioStatus -and $audioStatus.status -eq "loading") {
+    Write-Host "[Info] Audio model is still loading in the background; text messages are available."
+} elseif ($audioStatus -and $audioStatus.status -in @("failed", "stopped")) {
+    Write-Host "[Warning] Audio model is not ready: $($audioStatus.message)"
+} else {
+    Write-Host "[Warning] Audio model status is not available yet; check the QCCA management page."
+}
+
+$systemStatus = Get-QccaJson "$qccaBaseUrl/qcca/system-status"
+if ($systemStatus -and $systemStatus.overall -eq "error") {
+    Write-Diagnostic $startupLog "[Self-check] Management status reports a required service error."
+} elseif ($systemStatus) {
+    Write-Diagnostic $startupLog "[Self-check] Management status overall: $($systemStatus.overall)."
+}
+if ($systemStatus) {
+    foreach ($service in @($systemStatus.services)) {
+        if ($service) {
+            Write-Host "[Info] $($service.name): $($service.status) - $($service.summary)"
+        }
+    }
 }
 $env:PYTHONUTF8 = $previousPythonUtf8
 exit 0
