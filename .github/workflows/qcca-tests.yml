@@ -1,0 +1,33 @@
+name: QCCA tests
+
+on:
+  push:
+    paths:
+      - "qcca/**"
+      - ".github/workflows/qcca-tests.yml"
+  pull_request:
+    paths:
+      - "qcca/**"
+      - ".github/workflows/qcca-tests.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  unittest:
+    # QCCA ships for Windows x64 only; this also exercises the msvcrt file lock.
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version-file: qcca/python-version.txt
+      - name: Install test dependencies
+        # The speech stack (torch, FunASR, pysilk) is not needed by the tests.
+        run: >
+          python -m pip install --disable-pip-version-check
+          -r qcca/api-requirements.txt
+          watchdog==6.0.0 requests==2.32.3 httpx==0.28.1
+      - name: Run unit tests
+        run: python -m unittest discover -s qcca/tests -t . -v

@@ -6,13 +6,14 @@ import tempfile
 import uuid
 from collections import deque
 from contextlib import contextmanager
-from threading import RLock
+from threading import RLock, local
 from typing import Iterator, Optional
 from datetime import datetime
 _smtp_lock = RLock()
 _user_config_lock = RLock()
 _memory_lock = RLock()
 _preferences_lock = RLock()
+_file_lock_state = local()
 
 DEFAULT_AGENT = "codex"
 DEFAULT_SANDBOX = "read-only"
@@ -33,16 +34,22 @@ def qcca_home() -> str:
     return os.path.expanduser(r'~\.qq-chat-exporter\qcca')
 
 
-def _atomic_write_json(path: str, payload, prefix: str, indent: int | None = 2) -> None:
-    """Write JSON through a unique temporary file and atomically replace ``path``."""
+def _atomic_write_json(path: str, payload, prefix: str, indent: int | None = 2,
+                       durable: bool = True) -> None:
+    """Write JSON through a unique temporary file and atomically replace ``path``.
+
+    ``durable=False`` skips fsync for frequently rewritten, disposable status
+    files; the replace is still atomic, so readers never see partial JSON.
+    """
     fd, temporary_path = tempfile.mkstemp(
         prefix=prefix, suffix=".tmp", dir=os.path.dirname(path)
     )
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as file:
             json.dump(payload, file, ensure_ascii=False, indent=indent)
-            file.flush()
-            os.fsync(file.fileno())
+            if durable:
+                file.flush()
+                os.fsync(file.fileno())
         os.replace(temporary_path, path)
     except OSError:
         try:
@@ -54,7 +61,31 @@ def _atomic_write_json(path: str, payload, prefix: str, indent: int | None = 2) 
 
 @contextmanager
 def user_config_file_lock():
-    """跨进程锁住 QCCA 用户配置，避免 API 与 Agent 互相覆盖。"""
+    """跨进程锁住 QCCA 用户配置，避免 API 与 Agent 互相覆盖。
+
+    Also serializes threads in this process, always taking the in-process
+    lock before the file lock so every caller uses the same lock order.
+    Re-entrant per thread: a thread that already holds the lock can call
+    helpers such as ``write_user_config`` that take it again.
+    """
+    depth = getattr(_file_lock_state, "depth", 0)
+    if depth:
+        _file_lock_state.depth = depth + 1
+        try:
+            yield
+        finally:
+            _file_lock_state.depth -= 1
+        return
+    with _user_config_lock, _acquire_user_config_file_lock():
+        _file_lock_state.depth = 1
+        try:
+            yield
+        finally:
+            _file_lock_state.depth = 0
+
+
+@contextmanager
+def _acquire_user_config_file_lock():
     lock_path = os.path.join(os.path.dirname(config_dir_file()), ".config.lock")
     lock_file = open(lock_path, "a+b")
     try:
@@ -278,7 +309,7 @@ def get_default_agent() -> str:
 
 def write_user_config(config_path: str, config: dict) -> None:
     """原子保存用户、工作区和会话配置，避免中途写入损坏 JSON。"""
-    with _user_config_lock, user_config_file_lock():
+    with user_config_file_lock():
         write_user_config_unlocked(config_path, config)
 
 
@@ -306,7 +337,7 @@ def update_audio_model_status(status: str, message: str = "") -> None:
         "message": message,
         "updated_at": time.time(),
     }
-    _atomic_write_json(path, payload, ".audio_model_status.", indent=None)
+    _atomic_write_json(path, payload, ".audio_model_status.", indent=None, durable=False)
 
 
 def get_audio_model_status() -> dict:
@@ -674,7 +705,7 @@ def update_agent_status(
         'message': message,
         'updated_at': time.time(),
     }
-    _atomic_write_json(path, payload, '.agent_status.', indent=None)
+    _atomic_write_json(path, payload, '.agent_status.', indent=None, durable=False)
 
 
 def get_agent_status() -> dict:

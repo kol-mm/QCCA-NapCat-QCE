@@ -25,6 +25,8 @@ class ApiServiceTests(unittest.TestCase):
         )
         expanduser.start()
         self.addCleanup(expanduser.stop)
+        api_service._invalidate_status_cache()
+        self.addCleanup(api_service._invalidate_status_cache)
         self.client = TestClient(api_service.app)
 
     def test_records_endpoint_returns_total_and_bounded_tail(self):
@@ -48,6 +50,18 @@ class ApiServiceTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(login.call_count, 1)
         self.assertEqual(response.json()["overall"], "error")
+
+    def test_system_status_is_briefly_cached_and_invalidated_by_writes(self):
+        with patch.object(api_service, "_get_current_login_qq", return_value=None) as login, \
+                patch.object(api_service, "_port_is_open", return_value=False):
+            self.client.get("/qcca/system-status")
+            self.client.get("/qcca/system-status")
+            self.assertEqual(login.call_count, 1)
+            self.client.put("/qcca/smtp-config", json={"sender_qq": "12345", "auth_code": "code"})
+            calls_after_write = login.call_count
+            self.client.get("/qcca/system-status")
+
+        self.assertEqual(login.call_count, calls_after_write + 1)
 
     def test_config_update_round_trip_keeps_session_ids(self):
         config_path = config_service.config_dir_file()

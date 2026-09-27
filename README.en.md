@@ -125,7 +125,7 @@ Session chat records are stored as JSONL, with one UUID-named file per session:
 %USERPROFILE%\.qq-chat-exporter\qcca\record\<session-id>.jsonl
 ```
 
-The default watched directory is `%USERPROFILE%\Documents\QQChatExporter\live-capture`. Set `QCCA_WATCH_DIR` before launch to change it. Set `QCCA_API_PORT` to change the API port.
+The default watched directory is `%USERPROFILE%\Documents\QQChatExporter\live-capture`. Set `QCCA_WATCH_DIR` before launch to change it. Set `QCCA_API_PORT` to change the API port. Set `QCCA_MAX_PARALLEL_SENDERS` to change how many senders' messages are handled at the same time (default 3; one sender's messages are always handled in order).
 
 ## Local Services
 

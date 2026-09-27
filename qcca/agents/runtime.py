@@ -24,14 +24,18 @@ class AgentContext:
     session_id: str | None = None
 
 
-def _load_config() -> tuple[str, dict[str, Any]]:
-    config_path = config.config_dir_file()
+def _read_config(config_path: str) -> dict[str, Any]:
     with open(config_path, "r", encoding="utf-8") as file:
         content = file.read().strip()
     config_data = json.loads(content) if content else {}
     if config.migrate_user_config(config_data):
         config.write_user_config(config_path, config_data)
-    return config_path, config_data
+    return config_data
+
+
+def _load_config() -> tuple[str, dict[str, Any]]:
+    config_path = config.config_dir_file()
+    return config_path, _read_config(config_path)
 
 
 def _new_session() -> str:
@@ -180,7 +184,14 @@ def agent_qcca(agent_control: Callable) -> Callable:
             if not isinstance(agent_name, str) or not agent_name.strip():
                 agent_name = getattr(agent_control, "__name__", "agent").removesuffix("_control")
             agent_name = agent_name.strip().lower()
-            persisted = _persist(config_data, config_path, target, agent_name)
+            # The Agent may have run for minutes while other senders' calls
+            # saved their own changes.  Re-read the file under the lock and
+            # carry over only this sender's entry so no update is lost.
+            with config.user_config_file_lock():
+                latest = _read_config(config_path)
+                if target.uid in config_data:
+                    latest[target.uid] = config_data[target.uid]
+                persisted = _persist(latest, config_path, target, agent_name)
             if target.new_user and not persisted:
                 return "创建新用户失败\n" + answer.strip()
             prefix = "创建新用户成功," if target.new_user else ""

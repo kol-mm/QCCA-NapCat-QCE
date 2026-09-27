@@ -1,4 +1,6 @@
 import time
+from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from time import sleep
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler, DirCreatedEvent, FileCreatedEvent
@@ -19,6 +21,7 @@ import requests
 
 LOGIN_INFO_URL = "http://127.0.0.1:3000/get_login_info"
 MAX_SESSION_LIST_LINES = 30
+DEFAULT_MAX_PARALLEL_SENDERS = 3
 DEFAULT_WATCH_DIR = os.path.expanduser(r"~\Documents\QQChatExporter\live-capture")
 
 AGENT_REGISTRY = AgentRegistry()
@@ -26,6 +29,8 @@ AGENT_REGISTRY.register(codex_control, "codex")
 AGENT_REGISTRY.register(claude_control, "claude")
 _agent_status_lock = threading.RLock()
 _agent_status_context = {'status': 'not_started', 'message': 'Agent 尚未启动'}
+# Agent calls currently in progress, keyed by sender QQ, in start order.
+_active_agent_runs: dict[str, dict] = {}
 
 
 def get_current_session_context(uid: str):
@@ -123,6 +128,25 @@ def publish_agent_status(status: str, **context) -> None:
             config_service.update_agent_status(status, **context)
         except OSError as e:
             print(f'写入 Agent 状态失败: {e}')
+
+
+def begin_agent_run(uid: str, **context) -> None:
+    """Record a started Agent call and publish it as the running status."""
+    with _agent_status_lock:
+        _active_agent_runs[uid] = context
+        publish_agent_status('running', uid=uid, **context)
+
+
+def end_agent_run(uid: str, status: str, **context) -> None:
+    """Publish a finished call, unless another sender's call is still running."""
+    with _agent_status_lock:
+        _active_agent_runs.pop(uid, None)
+        if _active_agent_runs:
+            # Keep showing the most recently started call that is still busy.
+            other_uid, other_context = next(reversed(_active_agent_runs.items()))
+            publish_agent_status('running', uid=other_uid, **other_context)
+        else:
+            publish_agent_status(status, uid=uid, **context)
 
 
 def heartbeat_agent_status() -> None:
@@ -229,6 +253,9 @@ def amr_to_16k_wav(amr_path: str, wav_path: str) -> bool:
 
 audio_model = None
 audio_model_ready = threading.Event()
+# Messages from different senders run in parallel; FunASR inference is not
+# documented as thread-safe, so transcriptions take turns.
+_audio_model_lock = threading.Lock()
 
 
 def load_audio_model() -> None:
@@ -267,27 +294,113 @@ def wait_for_audio_file(audio_path: str) -> bool:
     return wait_for_stable_size(audio_path, 15, require_content=True)
 
 
+def read_sender_uid(path: str) -> str | None:
+    """Return the sender QQ of the last well-formed message in a capture file."""
+    sender_uid = None
+    with open(path, 'r', encoding='utf-8') as file:
+        for line in file:
+            try:
+                data = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            message = data.get('message') if isinstance(data, dict) else None
+            sender = message.get('sender') if isinstance(message, dict) else None
+            content = message.get('content') if isinstance(message, dict) else None
+            if not isinstance(sender, dict) or not isinstance(content, dict):
+                continue
+            elements = content.get('elements')
+            uid = str(sender.get('uin') or '')
+            if uid and isinstance(elements, list) and elements:
+                sender_uid = uid
+    return sender_uid
+
+
+def max_parallel_senders() -> int:
+    try:
+        return max(1, int(os.getenv('QCCA_MAX_PARALLEL_SENDERS', DEFAULT_MAX_PARALLEL_SENDERS)))
+    except ValueError:
+        return DEFAULT_MAX_PARALLEL_SENDERS
+
+
+class PerSenderDispatcher:
+    """Run different senders' messages in parallel, each sender's in order.
+
+    A single Agent call can take minutes; without this, one user's request
+    would hold up every other user's messages behind it.
+    """
+
+    def __init__(self, max_workers: int):
+        self._executor = ThreadPoolExecutor(
+            max_workers=max_workers, thread_name_prefix='qcca-sender'
+        )
+        self._lock = threading.Lock()
+        self._queues: dict[str, deque] = {}
+
+    def submit(self, key: str, func, *args) -> None:
+        with self._lock:
+            queue = self._queues.get(key)
+            if queue is not None:
+                # A worker is already draining this sender; it will pick this up.
+                queue.append((func, args))
+                return
+            self._queues[key] = deque([(func, args)])
+        self._executor.submit(self._drain, key)
+
+    def _drain(self, key: str) -> None:
+        while True:
+            with self._lock:
+                queue = self._queues[key]
+                if not queue:
+                    del self._queues[key]
+                    return
+                func, args = queue.popleft()
+            try:
+                func(*args)
+            except Exception as exc:
+                print(f'处理 QQ {key} 的消息失败: {exc}')
+
+    def shutdown(self) -> None:
+        self._executor.shutdown(wait=False, cancel_futures=True)
+
+
 class myFileSystemEventHandler(FileSystemEventHandler):
-    def __init__(self):
+    def __init__(self, dispatcher: PerSenderDispatcher | None = None):
         super().__init__()
         # 按发送者保存待应用的切换参数，避免不同 QQ 用户互相覆盖。
+        # Each sender's messages are processed in order by one worker at a
+        # time, so a sender's entry is never touched by two threads at once.
         self.user_params = {}
-
+        self.dispatcher = dispatcher
 
     def on_created(self, event: DirCreatedEvent | FileCreatedEvent) -> None:
         # Media files, temporary WAVs and directories also land in the watch
         # tree; filter them before touching the NapCat HTTP API.
         if event.is_directory or not event.src_path.endswith('.jsonl'):
             return
-        print(f'文件{event.src_path}被创建，获取接收方信息')
+        print(f'文件{event.src_path}被创建')
+        try:
+            # 等待导出程序完成写入，避免读取到半条 JSONL。
+            wait_for_stable_size(event.src_path, 10, require_content=False)
+            sender_uid = read_sender_uid(event.src_path)
+        except (OSError, UnicodeDecodeError) as e:
+            print(f'文件{event.src_path}读取失败:{e}')
+            return
+        if not sender_uid:
+            print(f'文件{event.src_path}没有可处理的消息')
+            return
+        if self.dispatcher is None:
+            self.process_file(event.src_path)
+        else:
+            self.dispatcher.submit(sender_uid, self.process_file, event.src_path)
+
+    def process_file(self, path: str) -> None:
+        print(f'处理文件{path}，获取接收方信息')
         receive_uid = get_login_uid()
         if receive_uid is None:
             return
         data_list=[]
         try:
-            # 等待导出程序完成写入，避免读取到半条 JSONL。
-            wait_for_stable_size(event.src_path, 10, require_content=False)
-            with open(event.src_path,'r',encoding='utf-8') as f1:
+            with open(path,'r',encoding='utf-8') as f1:
                 for line in f1:
                     line = line.strip()
                     if not line:
@@ -319,7 +432,7 @@ class myFileSystemEventHandler(FileSystemEventHandler):
                         text = content.get('text')
                         if text:
                             data_list.append(str(text))
-                            print(f'文件{event.src_path}读取成功')
+                            print(f'文件{path}读取成功')
                     elif message_type == 'audio':
                         media = data.get('media')
                         audio_path = (
@@ -342,12 +455,13 @@ class myFileSystemEventHandler(FileSystemEventHandler):
                             if not decoded:
                                 send_email(receive_uid, send_uid, '语音解码失败，暂时无法识别该语音。')
                                 return
-                            text_list = audio_model.generate(input=wav_path)
+                            with _audio_model_lock:
+                                text_list = audio_model.generate(input=wav_path)
                             text = text_list[0].get('text') if text_list and isinstance(text_list[0], dict) else ''
                             data_list.append(text or '未识别到内容')
                             print(f'识别内容为:{text}')
                         except Exception as e:
-                            print(f'文件{event.src_path}语音识别失败:{e}')
+                            print(f'文件{path}语音识别失败:{e}')
                             send_email(receive_uid, send_uid, '语音识别失败，请稍后重试。')
                             return
                         finally:
@@ -480,9 +594,8 @@ class myFileSystemEventHandler(FileSystemEventHandler):
                     if agent_control is None:
                         send_email(receive_uid, send_uid, '没有可用的编码 Agent。')
                         return
-                    publish_agent_status(
-                        'running',
-                        uid=send_uid,
+                    begin_agent_run(
+                        send_uid,
                         workspace=target.get('workspace') or current.get('workspace'),
                         session=target.get('session') or '待创建',
                         session_id=target.get('session_id'),
@@ -500,9 +613,9 @@ class myFileSystemEventHandler(FileSystemEventHandler):
                         )
                     except Exception as exc:
                         failed = get_current_session_context(send_uid) or current
-                        publish_agent_status(
+                        end_agent_run(
+                            send_uid,
                             'failed',
-                            uid=send_uid,
                             workspace=failed.get('workspace') or target.get('workspace'),
                             session=failed.get('session') or target.get('session'),
                             session_id=failed.get('session_id') or target.get('session_id'),
@@ -514,9 +627,9 @@ class myFileSystemEventHandler(FileSystemEventHandler):
                         return
                     finished = get_current_session_context(send_uid) or current
                     finished_agent = finished.get('agent') or agent_name
-                    publish_agent_status(
+                    end_agent_run(
+                        send_uid,
                         'idle',
-                        uid=send_uid,
                         workspace=finished.get('workspace'),
                         session=finished.get('session'),
                         session_id=finished.get('session_id'),
@@ -542,7 +655,7 @@ class myFileSystemEventHandler(FileSystemEventHandler):
                         print('目标会话未成功落盘，跳过聊天记录保存')
                     send_email(receive_uid, send_uid, agent_text)
         except Exception as e:
-            print(f'文件{event.src_path}处理失败:{e}')
+            print(f'文件{path}处理失败:{e}')
 
 
 if __name__ == '__main__':
@@ -553,7 +666,10 @@ if __name__ == '__main__':
     # 创建记录目录；config_dir_file() 同时创建工作目录和空配置文件。
     os.makedirs(os.path.join(config_service.qcca_home(), 'record'), exist_ok=True)
     config_service.config_dir_file()
-    myhandler=myFileSystemEventHandler()
+    workers = max_parallel_senders()
+    dispatcher = PerSenderDispatcher(workers)
+    print(f'并行处理的发送者上限：{workers}', flush=True)
+    myhandler=myFileSystemEventHandler(dispatcher)
     print('开始监听文件夹', flush=True)
     observer = Observer()
     watch_dir = os.path.abspath(os.path.expandvars(
@@ -582,6 +698,7 @@ if __name__ == '__main__':
         print("\n准备停止监听")
         publish_agent_status('stopped', message='Agent 已停止')
         observer.stop()
+        dispatcher.shutdown()
 
         observer.join()  # 等待observer线程完全结束
         print("程序退出")
