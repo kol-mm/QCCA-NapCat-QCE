@@ -40,7 +40,7 @@ flowchart LR
 | --- | --- |
 | [NapCatQQ](https://github.com/NapNeko/NapCatQQ) | v4.18.19, QQ and OneBot interface |
 | [QQ Chat Exporter](https://github.com/shuakami/qq-chat-exporter) | v5.5.80, export and browse QQ chat records |
-| QCCA | v1.2.1; watches messages, invokes Codex or Claude, and replies through QQ Mail |
+| QCCA | v1.3.0; watches messages, invokes Codex or Claude, and replies through QQ Mail |
 | QCCA API | Local FastAPI management service |
 
 ## Features
@@ -53,17 +53,17 @@ flowchart LR
 - Manage the Agent type, sandbox permissions, session records, and sender QQ accounts from a local web page.
 - Use the first-run wizard and one-page status overview to check NapCat, QCE, QCCA, Agent, audio, and SMTP at a glance.
 
-## What's New In 1.2.1
+## What's New In 1.3.0
 
-- Added Codex / Claude multi-Agent support. Sessions can switch Agent through QQ commands or the management page.
-- Added an Agent registry and isolated adapters so more coding Agents can be integrated without changing the message-processing flow.
-- Sessions now use globally unique UUIDs and store human-Agent conversations in separate JSONL files.
-- QCCA injects the current session's shared memory when invoking an Agent, so switching Agent preserves the QCCA conversation context.
-- The management page shows Agent runtime status, workspace, session, session ID, and the latest 200 chat records.
-- Existing sessions now have an Agent selector while workspace paths, session names, and session IDs remain read-only.
-- Improved `/agent`, `/status`, `/sessions`, and `/cancel` commands and failure-state reporting.
-- Added a first-run setup wizard for environment checks, the default Agent for new sessions, and the current QQ Mail authorization code.
-- Added a unified runtime status overview with plain-language recovery actions when a service is unavailable.
+- Messages from different QQ users are handled at the same time (default 3, `QCCA_MAX_PARALLEL_SENDERS`); one user's messages are still handled in order, so a long Agent call no longer blocks everyone else.
+- The speech recognition model can load on demand and is released when idle: `QCCA_AUDIO_MODEL=eager` (default), `lazy` or `off`, with `QCCA_AUDIO_IDLE_MINUTES` for the idle time (default 10 minutes).
+- Codex output is processed line by line, so long runs no longer use large amounts of memory.
+- Voice messages are converted to 16 kHz audio in memory; no temporary WAV files are written into QQ's media folder.
+- Faster startup dependency check: PyTorch and FunASR are only located, not fully imported.
+- Faster status checks on the management page; chat records refresh only when they change instead of flickering and resetting scroll every 5 seconds, and polling pauses while the page is hidden.
+- The session search box on QCE pages is much smoother with large session lists, and no longer leaves a listener behind each time a dialog opens.
+- Fixed lost updates when configuration is written concurrently, inconsistent lock ordering, and a shared SMTP temporary file.
+- Added automated Windows tests with GitHub Actions.
 
 ## Quick Start
 
