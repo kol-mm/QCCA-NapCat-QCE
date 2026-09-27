@@ -1,0 +1,76 @@
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+try:
+    from fastapi.testclient import TestClient
+
+    import api_service
+    import config_service
+except ImportError:  # pragma: no cover - API dependencies are optional here
+    api_service = None
+
+
+@unittest.skipIf(api_service is None, "FastAPI test dependencies are not installed")
+class ApiServiceTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        expanduser = patch.object(
+            config_service.os.path, "expanduser", return_value=self.temporary.name
+        )
+        expanduser.start()
+        self.addCleanup(expanduser.stop)
+        self.client = TestClient(api_service.app)
+
+    def test_records_endpoint_returns_total_and_bounded_tail(self):
+        for index in range(api_service.MAX_RECORDS_RESPONSE + 5):
+            config_service.MemoryLine("user", str(index), "session-a")
+
+        response = self.client.get("/qcca/records/session-a")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["total"], api_service.MAX_RECORDS_RESPONSE + 5)
+        self.assertEqual(len(body["records"]), api_service.MAX_RECORDS_RESPONSE)
+        self.assertEqual(body["records"][0]["content"], "5")
+        self.assertEqual(self.client.get("/qcca/records/bad..%5Cid").status_code, 400)
+
+    def test_system_status_queries_login_once(self):
+        with patch.object(api_service, "_get_current_login_qq", return_value=None) as login, \
+                patch.object(api_service, "_port_is_open", return_value=False):
+            response = self.client.get("/qcca/system-status")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(login.call_count, 1)
+        self.assertEqual(response.json()["overall"], "error")
+
+    def test_config_update_round_trip_keeps_session_ids(self):
+        config_path = config_service.config_dir_file()
+        users = {"100": config_service.get_dict_user("ws", "chat")}
+        config_service.write_user_config(config_path, users)
+        session_id = users["100"]["workspaces"]["ws"]["sessions"]["chat"]["id"]
+
+        payload = {
+            "workspaces": {"ws": {"sandbox": "workspace-write", "sessions": {
+                "chat": {"id": session_id, "agent": "Claude"},
+            }}},
+            "recent_workspace_and_session": {"ws": "chat"},
+        }
+        self.assertEqual(self.client.put("/qcca/config/update/100", json=payload).status_code, 200)
+        stored = self.client.get("/qcca/config/100").json()
+
+        self.assertEqual(stored["workspaces"]["ws"]["sandbox"], "workspace-write")
+        self.assertEqual(stored["workspaces"]["ws"]["sessions"]["chat"],
+                         {"id": session_id, "agent": "claude"})
+
+        payload["workspaces"]["ws"]["sessions"]["chat"]["id"] = "other"
+        self.assertEqual(self.client.put("/qcca/config/update/100", json=payload).status_code, 400)
+
+
+if __name__ == "__main__":
+    unittest.main()

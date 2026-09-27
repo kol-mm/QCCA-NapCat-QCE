@@ -3,9 +3,7 @@ import os
 import shutil
 import socket
 import sys
-import tempfile
 import time
-from contextlib import suppress
 from json import JSONDecodeError
 from pathlib import Path
 from threading import RLock
@@ -21,6 +19,11 @@ from pydantic import BaseModel
 
 import config_service
 
+
+MAX_RECORDS_RESPONSE = 200
+NAPCAT_LOGIN_INFO_URL = "http://127.0.0.1:3000/get_login_info"
+VALID_SANDBOXES = config_service.VALID_SANDBOXES
+VALID_AGENTS = config_service.VALID_AGENTS
 
 app = FastAPI(
     title="QCCA API",
@@ -81,20 +84,20 @@ def get_agent_status():
 def get_session_records(session_id: str):
     """Return the JSONL chat records associated with one session UUID."""
     try:
-        records = config_service.ReadMemory(session_id)
+        total, records = config_service.ReadMemoryTail(session_id, MAX_RECORDS_RESPONSE)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {
         'session_id': session_id,
-        'total': len(records),
-        'records': records[-200:],
+        'total': total,
+        'records': records,
     }
 
 _config_lock = RLock()
 
 
 class Workspace(BaseModel):
-    sandbox: str = "read-only"
+    sandbox: str = config_service.DEFAULT_SANDBOX
     sessions: Dict[str, Any]
 
 
@@ -103,17 +106,13 @@ class User(BaseModel):
     recent_workspace_and_session: Dict[str, str]
 
 
-VALID_SANDBOXES = {"read-only", "workspace-write", "danger-full-access"}
-VALID_AGENTS = {"codex", "claude"}
-
-
 class SmtpConfigUpdate(BaseModel):
     sender_qq: str
     auth_code: str
 
 
 class SetupConfigUpdate(BaseModel):
-    default_agent: str = "codex"
+    default_agent: str = config_service.DEFAULT_AGENT
     auth_code: str = ""
 
 
@@ -148,26 +147,10 @@ def _write_users(users: dict) -> None:
 
 
 def _write_users_unlocked(users: dict) -> None:
-    config_path = _config_path()
-    temporary_path = None
     try:
-        with _config_lock, tempfile.NamedTemporaryFile(
-            "w",
-            encoding="utf-8",
-            dir=config_path.parent,
-            prefix=f".{config_path.name}.",
-            suffix=".tmp",
-            delete=False,
-        ) as file:
-            temporary_path = Path(file.name)
-            json.dump(users, file, ensure_ascii=False, indent=2)
-            file.flush()
-            os.fsync(file.fileno())
-        os.replace(temporary_path, config_path)
+        with _config_lock:
+            config_service.write_user_config_unlocked(str(_config_path()), users)
     except OSError as exc:
-        if temporary_path is not None:
-            with suppress(OSError):
-                temporary_path.unlink()
         raise HTTPException(status_code=500, detail=f"无法写入 QCCA 配置：{exc}") from exc
 
 
@@ -179,7 +162,7 @@ def _model_to_dict(model: BaseModel) -> dict:
 
 def _get_current_login_qq() -> str | None:
     try:
-        with urlopen("http://127.0.0.1:3000/get_login_info", timeout=2) as response:
+        with urlopen(NAPCAT_LOGIN_INFO_URL, timeout=2) as response:
             data = json.loads(response.read().decode("utf-8"))
         qq = data.get("data", {}).get("user_id")
         return str(qq) if isinstance(qq, (str, int)) and str(qq).isdigit() else None
@@ -187,8 +170,13 @@ def _get_current_login_qq() -> str | None:
         return None
 
 
-def _smtp_response() -> dict:
-    login_qq = _get_current_login_qq()
+_UNSET = object()
+
+
+def _smtp_response(login_qq: Any = _UNSET) -> dict:
+    """Build the SMTP status payload; pass ``login_qq`` to reuse a lookup."""
+    if login_qq is _UNSET:
+        login_qq = _get_current_login_qq()
     try:
         config = (
             config_service.ensure_smtp_account(login_qq)
@@ -234,7 +222,7 @@ def _system_status() -> dict:
     try:
         preferences = config_service.get_preferences()
     except config_service.PreferencesConfigError:
-        preferences = {"setup_completed": False, "default_agent": "codex"}
+        preferences = {"setup_completed": False, "default_agent": config_service.DEFAULT_AGENT}
     default_agent = preferences["default_agent"]
     login_qq = _get_current_login_qq()
     napcat_open = _port_is_open(3000)
@@ -285,7 +273,7 @@ def _system_status() -> dict:
         services.append(_service("audio", "语音识别", "waiting", "等待音频模型状态", "文字消息不受影响", required=False))
 
     try:
-        smtp = _smtp_response()
+        smtp = _smtp_response(login_qq)
         if smtp["configured"]:
             services.append(_service("smtp", "QQ 邮箱回复", "ready", f"发件账号 {smtp['selected_sender_qq']} 已配置", required=False))
         else:
@@ -361,7 +349,7 @@ def update_setup_config(config: SetupConfigUpdate):
     return {
         **preferences,
         "login_qq": login_qq,
-        "smtp_configured": _smtp_response()["configured"],
+        "smtp_configured": _smtp_response(login_qq)["configured"],
     }
 
 
@@ -422,7 +410,7 @@ def delete_smtp_config(sender_qq: str):
             raise HTTPException(status_code=404, detail="发件 QQ 配置不存在")
     except (OSError, config_service.SmtpConfigError) as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
-    return _smtp_response()
+    return _smtp_response(login_qq)
 
 
 @app.put("/qcca/config/update/{uid}")
@@ -458,7 +446,7 @@ def update_qcca_config(uid: int, user: User):
                     raise HTTPException(status_code=400, detail="会话配置格式无效")
                 if submitted.get("id") != current_session.get("id"):
                     raise HTTPException(status_code=400, detail="会话 ID 由 QCCA 自动管理，不能修改")
-                agent = submitted.get("agent", current_session.get("agent", "codex"))
+                agent = submitted.get("agent", current_session.get("agent", config_service.DEFAULT_AGENT))
                 if not isinstance(agent, str) or agent.lower() not in VALID_AGENTS:
                     raise HTTPException(status_code=400, detail="Agent 类型无效，可选：codex、claude")
                 normalized_sessions[session_name] = {

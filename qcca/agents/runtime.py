@@ -9,7 +9,7 @@ from typing import Any
 
 import config_service as config
 
-DEFAULT_SANDBOX = "read-only"
+DEFAULT_SANDBOX = config.DEFAULT_SANDBOX
 
 
 @dataclass
@@ -59,7 +59,7 @@ def _resolve_target(config_data: dict[str, Any], uid: str, workspace: str | None
 
     workspaces = user["workspaces"]
     recent_workspace, recent_agent = config.get_user_recent_session(user)
-    recent_agent = recent_agent or "codex"
+    recent_agent = recent_agent or config.DEFAULT_AGENT
     # Recover legacy or manually-edited configs whose recent pointer is empty
     # by selecting the first workspace/session that can actually run.
     if not recent_workspace:

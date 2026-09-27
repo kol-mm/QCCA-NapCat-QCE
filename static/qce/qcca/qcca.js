@@ -859,8 +859,19 @@
   renderIcons();
   byId('apiAddress').textContent = 'API · ' + API_BASE.replace(/^https?:\/\//, '');
   loadConfigs(false);
-  window.setInterval(loadSystemStatus, 5000);
-  window.setInterval(loadAudioModelStatus, 5000);
-  window.setInterval(loadAgentStatus, 2000);
-  window.setInterval(function () { if (state.selectedUid) loadSessionRecords(true); }, 5000);
+  // Poll only while the page is visible; background tabs would otherwise keep
+  // triggering NapCat, port and SMTP checks every few seconds.
+  function refreshSessionRecords() { if (state.selectedUid) loadSessionRecords(true); }
+  function whenVisible(task) { return function () { if (!document.hidden) task(); }; }
+  window.setInterval(whenVisible(loadSystemStatus), 5000);
+  window.setInterval(whenVisible(loadAudioModelStatus), 5000);
+  window.setInterval(whenVisible(loadAgentStatus), 2000);
+  window.setInterval(whenVisible(refreshSessionRecords), 5000);
+  document.addEventListener('visibilitychange', function () {
+    if (document.hidden) return;
+    loadSystemStatus();
+    loadAudioModelStatus();
+    loadAgentStatus();
+    refreshSessionRecords();
+  });
 })();

@@ -1,31 +1,23 @@
 import json
-import subprocess
 from typing import Optional
-from pathlib import Path
 
+from config_service import DEFAULT_SANDBOX, VALID_SANDBOXES
+
+from .cli import run_agent_cli, validate_request
 from .runtime import agent_qcca
 
-VALID_SANDBOXES = {"read-only", "workspace-write", "danger-full-access"}
 
 @agent_qcca
 def codex_control(
     context: str,
     workspace: str,
     native_session: Optional[str] = None,
-    sandbox: str = "read-only",
+    sandbox: str = DEFAULT_SANDBOX,
 ):
-    if not context or not context.strip():
-        raise ValueError("context 不能为空")
+    validate_request(context, workspace)
+    sandbox = sandbox if sandbox in VALID_SANDBOXES else DEFAULT_SANDBOX
 
-    if not workspace:
-        raise ValueError("workspace 不能为空")
-
-    sandbox = sandbox if sandbox in VALID_SANDBOXES else "read-only"
-
-    if not Path(workspace).is_dir():
-        raise ValueError(f"workspace 不存在或不是目录: {workspace}")
-
-    cmd_list = [
+    stdout = run_agent_cli("Codex", [
         "codex",
         "exec",
         "--json",
@@ -34,38 +26,13 @@ def codex_control(
         workspace,
         "--sandbox",
         sandbox,
-    ]
+        context,
+    ])
 
-    cmd_list.append(context)
-    try:
-        result = subprocess.run(
-            cmd_list,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=300,
-            check=False,
-        )
-    except FileNotFoundError as e:
-        raise RuntimeError("未找到 codex 命令，请确认已安装并已加入 PATH") from e
-    except subprocess.TimeoutExpired as e:
-        raise TimeoutError("Codex 执行超时，超过 300 秒") from e
-    except OSError as e:
-        raise RuntimeError(f"Codex 启动失败: {e}") from e
-
-    if result.returncode != 0:
-        error_message = result.stderr.strip() or result.stdout.strip()
-        raise RuntimeError(
-            f"Codex 执行失败，退出码: {result.returncode}"
-            + (f"\n{error_message}" if error_message else "")
-        )
-
-    stdout_list = result.stdout
     out_list = []
     error_list = []
 
-    for line in stdout_list.splitlines():
+    for line in stdout.splitlines():
         line = line.strip()
         if not line:
             continue
