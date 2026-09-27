@@ -1,0 +1,46 @@
+name: QCCA tests
+
+on:
+  # Pull requests are covered by the pull_request trigger; running on every
+  # branch push as well would test each PR commit twice.
+  push:
+    branches: [main]
+    paths:
+      - "qcca/**"
+      - ".github/workflows/qcca-tests.yml"
+  pull_request:
+    paths:
+      - "qcca/**"
+      - ".github/workflows/qcca-tests.yml"
+
+permissions:
+  contents: read
+
+# A newer commit on the same branch or PR supersedes a run still in progress.
+concurrency:
+  group: qcca-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unittest:
+    # QCCA ships for Windows x64 only; this also exercises the msvcrt file lock.
+    runs-on: windows-latest
+    timeout-minutes: 15
+    env:
+      # Same as start-services.ps1: log output contains Chinese text, which
+      # the runner's default cp1252 console encoding cannot print.
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version-file: qcca/python-version.txt
+      - name: Install test dependencies
+        # torch, FunASR and pysilk are not needed by the tests; numpy is
+        # pinned as in requirements.txt for the audio conversion test.
+        run: >
+          python -m pip install --disable-pip-version-check
+          -r qcca/api-requirements.txt
+          watchdog==6.0.0 requests==2.32.3 httpx==0.28.1 numpy==1.26.4
+      - name: Run unit tests
+        run: python -m unittest discover -s qcca/tests -t . -v

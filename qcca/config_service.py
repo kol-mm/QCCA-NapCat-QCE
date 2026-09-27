@@ -4,21 +4,88 @@ import re
 import time
 import tempfile
 import uuid
+from collections import deque
 from contextlib import contextmanager
-from threading import RLock
-from typing import Optional
+from threading import RLock, local
+from typing import Iterator, Optional
 from datetime import datetime
 _smtp_lock = RLock()
 _user_config_lock = RLock()
 _memory_lock = RLock()
 _preferences_lock = RLock()
+_file_lock_state = local()
 
+DEFAULT_AGENT = "codex"
+DEFAULT_SANDBOX = "read-only"
 VALID_AGENTS = {"codex", "claude"}
+VALID_SANDBOXES = {"read-only", "workspace-write", "danger-full-access"}
+# Agent 心跳超过该秒数未刷新时，管理页将其视为已停止。
+HEARTBEAT_TIMEOUT_SECONDS = 15
+
+_SWITCH_KEYS = r'(?:workspace|session|sandbox|agent)'
+_SWITCH_TOKEN = rf'{_SWITCH_KEYS}=(?:"[^"]*"|\S+)'
+_SWITCH_PARAM_PATTERN = re.compile(r'(workspace|session|sandbox|agent)=(?:"([^"]*)"|(\S+))')
+_SWITCH_COMMAND_PATTERN = re.compile(rf'{_SWITCH_TOKEN}(?:\s+{_SWITCH_TOKEN})*')
+_SESSION_ID_PATTERN = re.compile(r'[A-Za-z0-9._-]+')
+
+
+def qcca_home() -> str:
+    """Return the per-user QCCA data directory."""
+    return os.path.expanduser(r'~\.qq-chat-exporter\qcca')
+
+
+def _atomic_write_json(path: str, payload, prefix: str, indent: int | None = 2,
+                       durable: bool = True) -> None:
+    """Write JSON through a unique temporary file and atomically replace ``path``.
+
+    ``durable=False`` skips fsync for frequently rewritten, disposable status
+    files; the replace is still atomic, so readers never see partial JSON.
+    """
+    fd, temporary_path = tempfile.mkstemp(
+        prefix=prefix, suffix=".tmp", dir=os.path.dirname(path)
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as file:
+            json.dump(payload, file, ensure_ascii=False, indent=indent)
+            if durable:
+                file.flush()
+                os.fsync(file.fileno())
+        os.replace(temporary_path, path)
+    except OSError:
+        try:
+            os.unlink(temporary_path)
+        except OSError:
+            pass
+        raise
 
 
 @contextmanager
 def user_config_file_lock():
-    """跨进程锁住 QCCA 用户配置，避免 API 与 Agent 互相覆盖。"""
+    """跨进程锁住 QCCA 用户配置，避免 API 与 Agent 互相覆盖。
+
+    Also serializes threads in this process, always taking the in-process
+    lock before the file lock so every caller uses the same lock order.
+    Re-entrant per thread: a thread that already holds the lock can call
+    helpers such as ``write_user_config`` that take it again.
+    """
+    depth = getattr(_file_lock_state, "depth", 0)
+    if depth:
+        _file_lock_state.depth = depth + 1
+        try:
+            yield
+        finally:
+            _file_lock_state.depth -= 1
+        return
+    with _user_config_lock, _acquire_user_config_file_lock():
+        _file_lock_state.depth = 1
+        try:
+            yield
+        finally:
+            _file_lock_state.depth = 0
+
+
+@contextmanager
+def _acquire_user_config_file_lock():
     lock_path = os.path.join(os.path.dirname(config_dir_file()), ".config.lock")
     lock_file = open(lock_path, "a+b")
     try:
@@ -73,8 +140,7 @@ def parse_sandbox_params(text: str) -> dict[str, str | None]:
     if text.count('"') % 2:
         return result
 
-    pattern = re.compile(r'(workspace|session|sandbox|agent)=(?:"([^"]*)"|(\S+))')
-    for match in pattern.finditer(text[1:]):
+    for match in _SWITCH_PARAM_PATTERN.finditer(text[1:]):
         key = match.group(1)
         value = match.group(2) if match.group(2) is not None else match.group(3)
         if not value or not value.strip():
@@ -83,14 +149,13 @@ def parse_sandbox_params(text: str) -> dict[str, str | None]:
             result["workspace"] = value
         elif key == "session":
             result["session"] = value
-        elif key == "sandbox" and value in {
-            "read-only", "workspace-write", "danger-full-access",
-        }:
+        elif key == "sandbox" and value in VALID_SANDBOXES:
             result["sandbox"] = value
-        elif key == "agent" and value.lower() in {"codex", "claude"}:
+        elif key == "agent" and value.lower() in VALID_AGENTS:
             result["agent"] = value.lower()
 
     return result
+
 
 def is_sandbox_command(text: str) -> bool:
     """仅把包含切换参数的斜杠消息视为分支切换命令。"""
@@ -103,40 +168,30 @@ def is_sandbox_command(text: str) -> bool:
         return False
     # A quoted workspace may contain spaces; validate the complete command
     # against the same token grammar used by parse_sandbox_params.
-    if not re.fullmatch(r'(?:workspace|session|sandbox|agent)=(?:"[^"]*"|\S+)(?:\s+(?:workspace|session|sandbox|agent)=(?:"[^"]*"|\S+))*', body):
-        return False
-    return True
-def get_dict_user(workspace, session, agent='codex', sandbox='read-only'):
-    dict_user={}
-    dict_workspaces={}
-    dict_workspace={}
-    dict_sessions={}
-    dict_recent_session={}
+    return _SWITCH_COMMAND_PATTERN.fullmatch(body) is not None
 
-    dict_sessions[session]={'id': str(uuid.uuid4()), 'agent': agent or 'codex'}
-    dict_workspace['sandbox']=sandbox
-    dict_workspace['sessions']=dict_sessions
-    dict_workspaces[workspace]=dict_workspace
-    dict_user['workspaces']=dict_workspaces
-    dict_recent_session[workspace]=session
-    dict_user['recent_workspace_and_session']=dict_recent_session
 
-    return dict_user
-def get_dict_workspace(session, agent='codex', sandbox='read-only'):
-    dict_workspace={}
-    dict_sessions={}
-    dict_workspace['sandbox']=sandbox
-    dict_sessions[session]={'id': str(uuid.uuid4()), 'agent': agent or 'codex'}
-    dict_workspace['sessions']=dict_sessions
-    return dict_workspace
+def _new_session_entry(agent=DEFAULT_AGENT):
+    return {'id': str(uuid.uuid4()), 'agent': agent or DEFAULT_AGENT}
+
+
+def get_dict_user(workspace, session, agent=DEFAULT_AGENT, sandbox=DEFAULT_SANDBOX):
+    return {
+        'workspaces': {workspace: get_dict_workspace(session, agent, sandbox)},
+        'recent_workspace_and_session': {workspace: session},
+    }
+
+
+def get_dict_workspace(session, agent=DEFAULT_AGENT, sandbox=DEFAULT_SANDBOX):
+    return {'sandbox': sandbox, 'sessions': {session: _new_session_entry(agent)}}
 
 
 def session_agent(value):
     """Return the Agent type stored for a session."""
     if isinstance(value, dict):
         agent = value.get('agent')
-        return agent if isinstance(agent, str) and agent else 'codex'
-    return 'codex'
+        return agent if isinstance(agent, str) and agent else DEFAULT_AGENT
+    return DEFAULT_AGENT
 
 
 def session_id(value):
@@ -164,10 +219,10 @@ def migrate_user_config(config: dict) -> bool:
                     agent = value.get('agent')
                     sid = value.get('id')
                 else:
-                    agent = 'codex'
+                    agent = DEFAULT_AGENT
                     sid = None
                 if not isinstance(agent, str) or not agent.strip():
-                    agent = 'codex'
+                    agent = DEFAULT_AGENT
                     changed = True
                 if not isinstance(sid, str) or not sid or sid in used:
                     sid = str(uuid.uuid4())
@@ -181,9 +236,9 @@ def migrate_user_config(config: dict) -> bool:
                 used.add(sid)
     return changed
 
+
 def config_dir_file():
-    work_path = os.path.expanduser(r'~\.qq-chat-exporter\qcca')
-    config_dir = os.path.join(work_path, "workspace")
+    config_dir = os.path.join(qcca_home(), "workspace")
     config_file = os.path.join(config_dir, "config.json")
     os.makedirs(config_dir, exist_ok=True)
     if not os.path.exists(config_file) or os.path.getsize(config_file) == 0:
@@ -199,7 +254,7 @@ def preferences_file() -> str:
 
 def get_preferences() -> dict:
     """Read setup preferences without forcing existing users through the wizard."""
-    defaults = {"setup_completed": False, "default_agent": "codex"}
+    defaults = {"setup_completed": False, "default_agent": DEFAULT_AGENT}
     path = preferences_file()
     try:
         with _preferences_lock, open(path, "r", encoding="utf-8") as file:
@@ -219,9 +274,9 @@ def get_preferences() -> dict:
 
     if not isinstance(data, dict):
         raise PreferencesConfigError("QCCA 偏好配置根节点必须是 JSON 对象")
-    agent = data.get("default_agent", "codex")
+    agent = data.get("default_agent", DEFAULT_AGENT)
     if not isinstance(agent, str) or agent.lower() not in VALID_AGENTS:
-        agent = "codex"
+        agent = DEFAULT_AGENT
     return {
         "setup_completed": data.get("setup_completed") is True,
         "default_agent": agent.lower(),
@@ -240,21 +295,7 @@ def save_preferences(default_agent: str, setup_completed: bool = True) -> dict:
         "updated_at": time.time(),
     }
     with _preferences_lock:
-        fd, temporary_path = tempfile.mkstemp(
-            prefix=".preferences.", suffix=".tmp", dir=os.path.dirname(path)
-        )
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as file:
-                json.dump(payload, file, ensure_ascii=False, indent=2)
-                file.flush()
-                os.fsync(file.fileno())
-            os.replace(temporary_path, path)
-        except OSError:
-            try:
-                os.unlink(temporary_path)
-            except OSError:
-                pass
-            raise
+        _atomic_write_json(path, payload, ".preferences.")
     return {"setup_completed": payload["setup_completed"], "default_agent": agent}
 
 
@@ -263,27 +304,18 @@ def get_default_agent() -> str:
     try:
         return get_preferences()["default_agent"]
     except PreferencesConfigError:
-        return "codex"
+        return DEFAULT_AGENT
 
 
 def write_user_config(config_path: str, config: dict) -> None:
     """原子保存用户、工作区和会话配置，避免中途写入损坏 JSON。"""
-    with _user_config_lock, user_config_file_lock():
-        fd, temporary_path = tempfile.mkstemp(
-            prefix=".config.", suffix=".tmp", dir=os.path.dirname(config_path)
-        )
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as file:
-                json.dump(config, file, ensure_ascii=False, indent=2)
-                file.flush()
-                os.fsync(file.fileno())
-            os.replace(temporary_path, config_path)
-        except OSError:
-            try:
-                os.unlink(temporary_path)
-            except OSError:
-                pass
-            raise
+    with user_config_file_lock():
+        write_user_config_unlocked(config_path, config)
+
+
+def write_user_config_unlocked(config_path: str, config: dict) -> None:
+    """Atomically save user config; the caller must hold ``user_config_file_lock``."""
+    _atomic_write_json(config_path, config, ".config.")
 
 
 def smtp_config_file() -> str:
@@ -305,25 +337,11 @@ def update_audio_model_status(status: str, message: str = "") -> None:
         "message": message,
         "updated_at": time.time(),
     }
-    fd, temporary_path = tempfile.mkstemp(
-        prefix=".audio_model_status.", suffix=".tmp", dir=os.path.dirname(path)
-    )
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as file:
-            json.dump(payload, file, ensure_ascii=False)
-            file.flush()
-            os.fsync(file.fileno())
-        os.replace(temporary_path, path)
-    except OSError:
-        try:
-            os.unlink(temporary_path)
-        except OSError:
-            pass
-        raise
+    _atomic_write_json(path, payload, ".audio_model_status.", indent=None, durable=False)
 
 
 def get_audio_model_status() -> dict:
-    """读取 Agent 状态；就绪状态超过 15 秒未心跳则视为已停止。"""
+    """读取 Agent 状态；Agent 运行时每 5 秒刷新，超过 15 秒未心跳则视为已停止。"""
     try:
         with open(audio_model_status_file(), "r", encoding="utf-8") as file:
             data = json.load(file)
@@ -336,7 +354,8 @@ def get_audio_model_status() -> dict:
     updated_at = data.get("updated_at")
     if not isinstance(status, str) or not isinstance(updated_at, (int, float)):
         return {"status": "unknown", "message": "音频模型状态格式无效"}
-    if status in {"loading", "ready"} and time.time() - updated_at > 15:
+    if (status in {"loading", "ready", "standby", "disabled"}
+            and time.time() - updated_at > HEARTBEAT_TIMEOUT_SECONDS):
         return {"status": "stopped", "message": "Agent 心跳已停止"}
     return {
         "status": status,
@@ -441,40 +460,29 @@ def delete_smtp_account(sender_qq: str) -> bool:
 
 
 def _write_smtp_config(config: dict) -> None:
-    path = smtp_config_file()
-    temp_path = f"{path}.tmp"
-    with open(temp_path, "w", encoding="utf-8") as file:
-        safe = dict(config)
-        safe["accounts"] = {
-            qq: {"auth_code": account.get("auth_code", "")}
-            for qq, account in config.get("accounts", {}).items()
-        }
-        safe.pop("_legacy_auth_code", None)
-        json.dump(safe, file, ensure_ascii=False, indent=2)
-        file.flush()
-        os.fsync(file.fileno())
-    os.replace(temp_path, path)
+    safe = dict(config)
+    safe["accounts"] = {
+        qq: {"auth_code": account.get("auth_code", "")}
+        for qq, account in config.get("accounts", {}).items()
+    }
+    safe.pop("_legacy_auth_code", None)
+    # 使用唯一临时文件，避免 API 与 Agent 并发写入同一个 smtp.json.tmp。
+    _atomic_write_json(smtp_config_file(), safe, ".smtp.")
+
+
 def dict_user_exist(uid):
+    """Return one QQ user's stored config, or None when absent or unreadable."""
     try:
         with open(config_dir_file(), 'r', encoding='utf-8') as f:
             config_dict = json.load(f)
-            if not uid in config_dict:
-                return None
-            else:
-                return config_dict[uid]
-    except (FileNotFoundError,json.JSONDecodeError,PermissionError,OSError) as e:
+    except (OSError, json.JSONDecodeError):
         return None
-def is_user_workspace_or_session(user,workspace,session):
-    if isinstance(user, dict):
-        try:
-            if workspace in user['workspaces'] and session in user['workspaces'][workspace]['sessions']:
-                return True
-        except (KeyError, TypeError):
-            pass
-    return False
+    return config_dict.get(uid) if isinstance(config_dict, dict) else None
+
+
 def add_user_data(config_dict, config_path, uid, workspace, session,
-                  agent='codex', sandbox='read-only'):
-    sandbox = sandbox or 'read-only'
+                  agent=DEFAULT_AGENT, sandbox=DEFAULT_SANDBOX):
+    sandbox = sandbox or DEFAULT_SANDBOX
     if uid not in config_dict:
         config_dict[uid] = get_dict_user(workspace, session, agent, sandbox)
     else:
@@ -484,9 +492,7 @@ def add_user_data(config_dict, config_path, uid, workspace, session,
                 if session in user_workspaces[workspace]['sessions']:
                     print('已存在')
                     return False
-                user_workspaces[workspace]['sessions'][session] = {
-                    'id': str(uuid.uuid4()), 'agent': agent or 'codex'
-                }
+                user_workspaces[workspace]['sessions'][session] = _new_session_entry(agent)
             else:
                 user_workspaces[workspace] = get_dict_workspace(session, agent, sandbox)
         except (KeyError, TypeError) as e:
@@ -503,6 +509,7 @@ def add_user_data(config_dict, config_path, uid, workspace, session,
         print(f'出现错误{e}')
         return False
 
+
 def get_user_recent_session(user:Optional[dict]):
     if isinstance(user, dict):
         try:
@@ -517,6 +524,7 @@ def get_user_recent_session(user:Optional[dict]):
     print('用户不存在')
     return None, None
 
+
 def set_user_recent_session(config_dict, config_path, uid, workspace, session):
     """将指定工作区和会话设为用户下次使用的分支。"""
     try:
@@ -526,100 +534,86 @@ def set_user_recent_session(config_dict, config_path, uid, workspace, session):
     except (KeyError, FileNotFoundError, PermissionError, OSError, TypeError) as e:
         print(f'更新最近分支失败: {e}')
         return False
-def refresh_and_add_user_data(uid, workspace, session, agent='codex', sandbox='read-only'):
-    config_dict = {}
-    config_path = config_dir_file()
-    try:
-        with open(config_path, 'r', encoding='utf-8') as f:
-            config_dict = json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError, PermissionError, OSError, TypeError) as e:
-        print(f'出现错误{e}')
-        return False
 
-    user = config_dict.get(uid)
-    if is_user_workspace_or_session(user, workspace, session):
-        # 会话已存在，仅切换recent，写回
-        try:
-            config_dict[uid]["recent_workspace_and_session"].clear()
-            config_dict[uid]["recent_workspace_and_session"][workspace] = session
-            write_user_config(config_path, config_dict)
-            print('切换成功')
-            return True
-        except (KeyError, FileNotFoundError, PermissionError, OSError, TypeError) as e:
-            print(f'写入失败 {e}')
-            return False
-    else:
-        # 把内存字典和路径直接传进去，不再重新读文件
-        if add_user_data(config_dict, config_path, uid, workspace, session, agent, sandbox):
-            print('新增切换成功')
-            return True
-        else:
-            print('新增失败')
-            return False
-def get_receive_uid():
-    path = os.getcwd()
-    path_father = os.path.dirname(path)
-    path_config = os.path.join(path_father, 'config')
-    if not os.path.isdir(path_config):
-        return None
-    path_list = os.listdir(path_config)
-    pattern = re.compile(r'^napcat_(\d+)\.json$')
-    for path in path_list:
-        match = pattern.match(path)
-        if match:
-            uid = match.group(1)
-            print(uid)
-            return uid
-    return None
+
+def _record_file(session_id: str) -> str:
+    if not isinstance(session_id, str) or not _SESSION_ID_PATTERN.fullmatch(session_id):
+        raise ValueError('session_id 只能包含字母、数字、点、下划线和连字符')
+    return os.path.join(qcca_home(), 'record', f'{session_id}.jsonl')
+
+
 def MemoryLine(role: str, content: str, session_id: str) -> None:
     """Append one conversation entry to the session's JSONL record."""
-    if not isinstance(session_id, str) or not re.fullmatch(r'[A-Za-z0-9._-]+', session_id):
-        raise ValueError('session_id 只能包含字母、数字、点、下划线和连字符')
-
-    work_path = os.path.expanduser(r'~\.qq-chat-exporter\qcca')
-    record_path = os.path.join(work_path, 'record')
-    record_file = os.path.join(record_path, f'{session_id}.jsonl')
+    record_file = _record_file(session_id)
     entry = {
         'role': role,
         'content': content,
         'time': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
     }
 
-    os.makedirs(record_path, exist_ok=True)
+    os.makedirs(os.path.dirname(record_file), exist_ok=True)
     # Append only the new line so large histories do not need to be rewritten.
     with _memory_lock:
         with open(record_file, 'a', encoding='utf-8', newline='') as f:
             f.write(json.dumps(entry, ensure_ascii=False) + '\n')
 
 
+def _iter_memory(record_file: str) -> Iterator[dict]:
+    """Yield valid JSONL entries one at a time; the caller holds ``_memory_lock``."""
+    with open(record_file, 'r', encoding='utf-8') as f:
+        for line_number, line in enumerate(f, start=1):
+            if not line.strip():
+                continue
+            try:
+                value = json.loads(line)
+            except json.JSONDecodeError as e:
+                print(f'聊天记录第 {line_number} 行格式无效，已跳过: {e}')
+                continue
+            if isinstance(value, dict):
+                yield value
+            else:
+                print(f'聊天记录第 {line_number} 行不是对象，已跳过')
+
+
 def ReadMemory(session_id: str) -> list[dict]:
     """Read all valid conversation entries for a session UUID."""
-    if not isinstance(session_id, str) or not re.fullmatch(r'[A-Za-z0-9._-]+', session_id):
-        raise ValueError('session_id 只能包含字母、数字、点、下划线和连字符')
-
-    work_path = os.path.expanduser(r'~\.qq-chat-exporter\qcca')
-    record_file = os.path.join(work_path, 'record', f'{session_id}.jsonl')
-    records = []
-
+    record_file = _record_file(session_id)
     with _memory_lock:
         try:
-            with open(record_file, 'r', encoding='utf-8') as f:
-                for line_number, line in enumerate(f, start=1):
-                    if not line.strip():
-                        continue
-                    try:
-                        value = json.loads(line)
-                    except json.JSONDecodeError as e:
-                        print(f'聊天记录第 {line_number} 行格式无效，已跳过: {e}')
-                        continue
-                    if isinstance(value, dict):
-                        records.append(value)
-                    else:
-                        print(f'聊天记录第 {line_number} 行不是对象，已跳过')
+            return list(_iter_memory(record_file))
         except FileNotFoundError:
             return []
 
-    return records
+
+def memory_etag(session_id: str) -> str | None:
+    """Return a cheap validator that changes whenever the session record does.
+
+    Records are append-only, so size plus modification time identifies a
+    version without reading the file.
+    """
+    try:
+        stat = os.stat(_record_file(session_id))
+    except FileNotFoundError:
+        return None
+    return f'"{stat.st_size}-{stat.st_mtime_ns}"'
+
+
+def ReadMemoryTail(session_id: str, limit: int) -> tuple[int, list[dict]]:
+    """Return the total entry count and the newest ``limit`` entries.
+
+    Streams the file so long histories are never fully held in memory.
+    """
+    record_file = _record_file(session_id)
+    total = 0
+    tail: deque[dict] = deque(maxlen=max(0, limit))
+    with _memory_lock:
+        try:
+            for value in _iter_memory(record_file):
+                total += 1
+                tail.append(value)
+        except FileNotFoundError:
+            return 0, []
+    return total, list(tail)
 
 
 def build_memory_context(
@@ -636,18 +630,28 @@ def build_memory_context(
     """
     if not session_id:
         return ""
+    # Stream the record so only the newest entries and the latest summary
+    # are kept in memory, however long the session history grows.
+    latest_summary = None
+    recent_window: deque[dict] = deque(maxlen=max(1, max_entries))
     try:
-        records = ReadMemory(session_id)
+        record_file = _record_file(session_id)
+        with _memory_lock:
+            for item in _iter_memory(record_file):
+                if item.get("role") == "summary":
+                    latest_summary = item
+                recent_window.append(item)
+    except FileNotFoundError:
+        return ""
     except (OSError, ValueError) as exc:
         # Memory is supplemental; an unreadable record must not block Agent work.
         print(f"读取共享记忆失败，继续执行当前请求: {exc}")
         return ""
-    if not records:
+    if not recent_window:
         return ""
 
-    summaries = [item for item in records if item.get("role") == "summary"][-1:]
-    recent = records[-max(1, max_entries):]
-    recent = [item for item in recent if item not in summaries]
+    summaries = [latest_summary] if latest_summary is not None else []
+    recent = [item for item in recent_window if item not in summaries]
 
     def format_entry(item: dict) -> str:
         role = str(item.get("role") or "unknown")
@@ -667,14 +671,16 @@ def build_memory_context(
             lines.append(line)
             used = len(line)
     recent_lines: list[str] = []
+    recent_used = 0
     for item in reversed(recent):
         line = format_entry(item)
         if not line:
             continue
         additional = len(line) + (1 if lines or recent_lines else 0)
-        if used + sum(len(value) + 1 for value in recent_lines) + additional > max_chars:
+        if used + recent_used + additional > max_chars:
             break
         recent_lines.append(line)
+        recent_used += len(line) + 1
     lines.extend(reversed(recent_lines))
 
     if not lines:
@@ -713,21 +719,7 @@ def update_agent_status(
         'message': message,
         'updated_at': time.time(),
     }
-    fd, temporary_path = tempfile.mkstemp(
-        prefix='.agent_status.', suffix='.tmp', dir=os.path.dirname(path)
-    )
-    try:
-        with os.fdopen(fd, 'w', encoding='utf-8') as file:
-            json.dump(payload, file, ensure_ascii=False)
-            file.flush()
-            os.fsync(file.fileno())
-        os.replace(temporary_path, path)
-    except OSError:
-        try:
-            os.unlink(temporary_path)
-        except OSError:
-            pass
-        raise
+    _atomic_write_json(path, payload, '.agent_status.', indent=None, durable=False)
 
 
 def get_agent_status() -> dict:
@@ -747,8 +739,7 @@ def get_agent_status() -> dict:
         return {'status': 'unknown', 'message': 'Agent 状态缺少有效心跳时间'}
     if (
         data['status'] in {'idle', 'running'}
-        and isinstance(updated_at, (int, float))
-        and time.time() - updated_at > 15
+        and time.time() - updated_at > HEARTBEAT_TIMEOUT_SECONDS
     ):
         return {
             'status': 'stopped',
@@ -765,100 +756,3 @@ def get_agent_status() -> dict:
         'message': data.get('message') if isinstance(data.get('message'), str) else '',
         'updated_at': updated_at,
     }
-
-
-
-# def refresh_and_add_user_data(uid, workspace, session, resume, sandbox='read-only'):
-#     config_dict = {}
-#     config_path = config_dir_file()
-#     try:
-#         with open(config_path, 'r', encoding='utf-8') as f:
-#             config_dict = json.load(f)
-#         if is_user_workspace_or_session(config_dict.get(uid), workspace, session):
-#             config_dict[uid]["recent_workspace_and_session"].clear()
-#             config_dict[uid]["recent_workspace_and_session"][workspace] = session
-#             print('切换成功')
-#             with open(config_path, 'w', encoding='utf-8') as f:
-#                 json.dump(config_dict, f, ensure_ascii=False, indent=2)
-#             return True
-#         else:
-#             if add_user_data(config_dict,config_path,uid, workspace, session, resume, sandbox):
-#                 print('新增切换成功')
-#                 return True
-#             else:
-#                 print('新增失败')
-#                 return False
-#     except (FileNotFoundError, json.JSONDecodeError, PermissionError, OSError) as e:
-#         print(f'出现错误{e}')
-#         return False
-#废弃
-# def refresh_user_session(uid,workspace,session):
-#     user=dict_user_exist(uid)
-#     if user :
-#         try:
-#             if workspace in user['recent_workspace_and_session']:
-#                 print('已经是这个会话')
-#                 return False
-#             else:
-#                 if session in user['workspaces'][workspace]['sessions']:
-#                     user['recent_workspace_and_session'][workspace]=session
-#                     with open(config_dir_file(), 'w', encoding='utf-8') as f:
-#                         json.dump(user, f, ensure_ascii=False, indent=2)
-#                         return True
-#         except (KeyError,StopIteration,FileNotFoundError,json.JSONDecodeError,PermissionError,OSError) as e:
-#优化合并
-# def dict_user_workspace_or_session(user,workspace,session):
-#     user=dict_user_exist(user)
-#     if(user):
-#         try:
-#             user_workspaces = user['workspaces']
-#             if workspace in user_workspaces:
-#                 if session in user_workspaces[workspace]['sessions']:
-#                     return user
-#                 else:
-#                     return None
-#             else:
-#                 return None
-#         except (KeyError,StopIteration) as e:
-#             print(e)
-#             return None
-# def save_user_data():
-#     pass
-# def add_user_data(uid,workspace,session,resume,sandbox='read-only'):
-#     config_dict = {}
-#     config_path=config_dir_file()
-#     try:
-#         with open(config_path, 'r', encoding='utf-8') as f:
-#             config_dict = json.load(f)
-#     except (FileNotFoundError, json.JSONDecodeError, PermissionError, OSError) as e:
-#         print(f'配置有问题{e}')
-#         return False
-#     if not config_dict.get(uid):
-#         try:
-#             config_dict[uid] = get_dict_user(workspace, session, resume, sandbox)
-#
-#         except (json.JSONDecodeError,PermissionError,OSError)  as e:
-#             return False
-#     else:
-#         try:
-#             user_workspaces = config_dict[uid]['workspaces']
-#             if workspace in user_workspaces:
-#                 if session in user_workspaces[workspace]['sessions']:
-#                     print('已存在')
-#                     return False
-#                 else:
-#                     user_workspaces[workspace]['sessions'][session] = resume
-#             else:
-#                 user_workspaces[workspace] =get_dict_workspace(session,resume,sandbox)
-#         except (FileNotFoundError,json.JSONDecodeError,PermissionError,OSError) as e:
-#             print('出现错误')
-#             return False
-#     try:
-#         config_dict[uid]["recent_workspace_and_session"].clear()
-#         config_dict[uid]["recent_workspace_and_session"][workspace] = session
-#         with open(config_path, 'w', encoding='utf-8') as f:
-#             json.dump(config_dict, f, ensure_ascii=False, indent=2)
-#             return True
-#     except (FileNotFoundError, json.JSONDecodeError, PermissionError, OSError) as e:
-#         print(f'出现错误{e}')
-#         return False

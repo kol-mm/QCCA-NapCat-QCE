@@ -125,7 +125,9 @@ Session chat records are stored as JSONL, with one UUID-named file per session:
 %USERPROFILE%\.qq-chat-exporter\qcca\record\<session-id>.jsonl
 ```
 
-The default watched directory is `%USERPROFILE%\Documents\QQChatExporter\live-capture`. Set `QCCA_WATCH_DIR` before launch to change it. Set `QCCA_API_PORT` to change the API port.
+The default watched directory is `%USERPROFILE%\Documents\QQChatExporter\live-capture`. Set `QCCA_WATCH_DIR` before launch to change it. Set `QCCA_API_PORT` to change the API port. Set `QCCA_MAX_PARALLEL_SENDERS` to change how many senders' messages are handled at the same time (default 3; one sender's messages are always handled in order).
+
+The speech recognition model takes roughly 1 GB of memory. `QCCA_AUDIO_MODEL` controls it: `eager` (default, load at startup), `lazy` (load on the first voice message) or `off` (no voice recognition; PyTorch and the model are never loaded). `QCCA_AUDIO_IDLE_MINUTES` releases the model after that many minutes without voice messages (default 10, `0` keeps it loaded); the next voice message reloads it.
 
 ## Local Services
 

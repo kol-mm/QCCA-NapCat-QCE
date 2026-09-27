@@ -3,24 +3,33 @@ import os
 import shutil
 import socket
 import sys
-import tempfile
 import time
-from contextlib import suppress
+from concurrent.futures import ThreadPoolExecutor
 from json import JSONDecodeError
 from pathlib import Path
-from threading import RLock
+from threading import Lock
 from typing import Any, Dict
 from urllib.error import URLError
 from urllib.request import urlopen
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 import config_service
 
+
+MAX_RECORDS_RESPONSE = 200
+NAPCAT_LOGIN_INFO_URL = "http://127.0.0.1:3000/get_login_info"
+# The management page polls system status every few seconds.  Results are
+# reused briefly so several open tabs do not each redo the NapCat and port
+# probes; CLI lookups scan PATH and change rarely, so they live longer.
+SYSTEM_STATUS_CACHE_SECONDS = 2.0
+COMMAND_CACHE_SECONDS = 30.0
+VALID_SANDBOXES = config_service.VALID_SANDBOXES
+VALID_AGENTS = config_service.VALID_AGENTS
 
 app = FastAPI(
     title="QCCA API",
@@ -37,7 +46,8 @@ app.add_middleware(
     ],
     allow_credentials=False,
     allow_methods=["GET", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=["Content-Type"],
+    allow_headers=["Content-Type", "If-None-Match"],
+    expose_headers=["ETag"],
 )
 
 _qcca_static_dir = Path(__file__).resolve().parents[1] / "static" / "qce" / "qcca"
@@ -78,23 +88,31 @@ def get_agent_status():
 
 
 @app.get("/qcca/records/{session_id}")
-def get_session_records(session_id: str):
-    """Return the JSONL chat records associated with one session UUID."""
+def get_session_records(session_id: str, request: Request):
+    """Return the JSONL chat records associated with one session UUID.
+
+    The management page re-polls this every few seconds; an unchanged record
+    answers ``304 Not Modified`` without reading the file.
+    """
     try:
-        records = config_service.ReadMemory(session_id)
+        etag = config_service.memory_etag(session_id)
+        if etag and request.headers.get("if-none-match") == etag:
+            return Response(status_code=304, headers={"ETag": etag})
+        total, records = config_service.ReadMemoryTail(session_id, MAX_RECORDS_RESPONSE)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return {
+    headers = {"Cache-Control": "no-cache"}
+    if etag:
+        headers["ETag"] = etag
+    return JSONResponse({
         'session_id': session_id,
-        'total': len(records),
-        'records': records[-200:],
-    }
-
-_config_lock = RLock()
+        'total': total,
+        'records': records,
+    }, headers=headers)
 
 
 class Workspace(BaseModel):
-    sandbox: str = "read-only"
+    sandbox: str = config_service.DEFAULT_SANDBOX
     sessions: Dict[str, Any]
 
 
@@ -103,17 +121,13 @@ class User(BaseModel):
     recent_workspace_and_session: Dict[str, str]
 
 
-VALID_SANDBOXES = {"read-only", "workspace-write", "danger-full-access"}
-VALID_AGENTS = {"codex", "claude"}
-
-
 class SmtpConfigUpdate(BaseModel):
     sender_qq: str
     auth_code: str
 
 
 class SetupConfigUpdate(BaseModel):
-    default_agent: str = "codex"
+    default_agent: str = config_service.DEFAULT_AGENT
     auth_code: str = ""
 
 
@@ -128,7 +142,7 @@ def _read_users() -> dict:
 
 def _read_users_unlocked() -> dict:
     try:
-        with _config_lock, _config_path().open("r", encoding="utf-8") as file:
+        with _config_path().open("r", encoding="utf-8") as file:
             data = json.load(file)
     except JSONDecodeError as exc:
         raise HTTPException(status_code=500, detail="QCCA 配置文件格式无效") from exc
@@ -148,26 +162,9 @@ def _write_users(users: dict) -> None:
 
 
 def _write_users_unlocked(users: dict) -> None:
-    config_path = _config_path()
-    temporary_path = None
     try:
-        with _config_lock, tempfile.NamedTemporaryFile(
-            "w",
-            encoding="utf-8",
-            dir=config_path.parent,
-            prefix=f".{config_path.name}.",
-            suffix=".tmp",
-            delete=False,
-        ) as file:
-            temporary_path = Path(file.name)
-            json.dump(users, file, ensure_ascii=False, indent=2)
-            file.flush()
-            os.fsync(file.fileno())
-        os.replace(temporary_path, config_path)
+        config_service.write_user_config_unlocked(str(_config_path()), users)
     except OSError as exc:
-        if temporary_path is not None:
-            with suppress(OSError):
-                temporary_path.unlink()
         raise HTTPException(status_code=500, detail=f"无法写入 QCCA 配置：{exc}") from exc
 
 
@@ -179,7 +176,7 @@ def _model_to_dict(model: BaseModel) -> dict:
 
 def _get_current_login_qq() -> str | None:
     try:
-        with urlopen("http://127.0.0.1:3000/get_login_info", timeout=2) as response:
+        with urlopen(NAPCAT_LOGIN_INFO_URL, timeout=2) as response:
             data = json.loads(response.read().decode("utf-8"))
         qq = data.get("data", {}).get("user_id")
         return str(qq) if isinstance(qq, (str, int)) and str(qq).isdigit() else None
@@ -187,8 +184,13 @@ def _get_current_login_qq() -> str | None:
         return None
 
 
-def _smtp_response() -> dict:
-    login_qq = _get_current_login_qq()
+_UNSET = object()
+
+
+def _smtp_response(login_qq: Any = _UNSET) -> dict:
+    """Build the SMTP status payload; pass ``login_qq`` to reuse a lookup."""
+    if login_qq is _UNSET:
+        login_qq = _get_current_login_qq()
     try:
         config = (
             config_service.ensure_smtp_account(login_qq)
@@ -230,18 +232,57 @@ def _service(service_id: str, name: str, status: str, summary: str,
     }
 
 
+_probe_executor = ThreadPoolExecutor(max_workers=3, thread_name_prefix="qcca-probe")
+_status_cache_lock = Lock()
+_status_cache: tuple[float, dict] | None = None
+_command_cache: dict[str, tuple[float, str | None]] = {}
+
+
+def _which(name: str) -> str | None:
+    """``shutil.which`` with a short cache; PATH scans are slow on Windows."""
+    now = time.monotonic()
+    cached = _command_cache.get(name)
+    if cached and now - cached[0] < COMMAND_CACHE_SECONDS:
+        return cached[1]
+    path = shutil.which(name)
+    _command_cache[name] = (now, path)
+    return path
+
+
+def _invalidate_status_cache() -> None:
+    global _status_cache
+    with _status_cache_lock:
+        _status_cache = None
+
+
+def _cached_system_status() -> dict:
+    global _status_cache
+    with _status_cache_lock:
+        cached = _status_cache
+        if cached and time.monotonic() - cached[0] < SYSTEM_STATUS_CACHE_SECONDS:
+            return cached[1]
+        status = _system_status()
+        _status_cache = (time.monotonic(), status)
+        return status
+
+
 def _system_status() -> dict:
     try:
         preferences = config_service.get_preferences()
     except config_service.PreferencesConfigError:
-        preferences = {"setup_completed": False, "default_agent": "codex"}
+        preferences = {"setup_completed": False, "default_agent": config_service.DEFAULT_AGENT}
     default_agent = preferences["default_agent"]
-    login_qq = _get_current_login_qq()
-    napcat_open = _port_is_open(3000)
     try:
         qce_port = int(_qce_web_port)
     except ValueError:
         qce_port = 40653
+    # Run the network probes concurrently: when NapCat hangs, the page waits
+    # for the slowest probe instead of the sum of all timeouts.
+    login_future = _probe_executor.submit(_get_current_login_qq)
+    napcat_future = _probe_executor.submit(_port_is_open, 3000)
+    qce_future = _probe_executor.submit(_port_is_open, qce_port)
+    login_qq = login_future.result()
+    napcat_open = napcat_future.result()
 
     services = []
     if login_qq:
@@ -251,7 +292,7 @@ def _system_status() -> dict:
     else:
         services.append(_service("napcat", "QQ 与 NapCat", "error", "尚未连接到 QQ", "请从 QCCA 启动器启动并登录 QQ"))
 
-    if _port_is_open(qce_port):
+    if qce_future.result():
         services.append(_service("qce", "QQ Chat Exporter", "ready", "聊天数据服务运行正常"))
     else:
         services.append(_service("qce", "QQ Chat Exporter", "error", "聊天数据服务未启动", "请重新启动完整程序"))
@@ -260,7 +301,7 @@ def _system_status() -> dict:
     agent_status = config_service.get_agent_status()
     agent_value = agent_status.get("status", "unknown")
     active_agent = agent_status.get("agent") or default_agent
-    agent_cli = shutil.which(active_agent)
+    agent_cli = _which(active_agent)
     if not agent_cli:
         services.append(_service("agent", "AI Agent", "error", f"未找到 {active_agent} 命令", f"请安装并登录 {active_agent}"))
     elif agent_value in {"idle", "running"}:
@@ -277,15 +318,19 @@ def _system_status() -> dict:
     audio_value = audio_status.get("status", "unknown")
     if audio_value == "ready":
         services.append(_service("audio", "语音识别", "ready", "音频模型已加载", required=False))
+    elif audio_value == "standby":
+        services.append(_service("audio", "语音识别", "ready", "按需加载", "收到语音消息时自动加载模型，空闲时释放内存", required=False))
+    elif audio_value == "disabled":
+        services.append(_service("audio", "语音识别", "ready", "已按设置关闭", "设置 QCCA_AUDIO_MODEL=eager 或 lazy 后重启以启用", required=False))
     elif audio_value == "loading":
-        services.append(_service("audio", "语音识别", "waiting", "首次加载音频模型", "文字消息不受影响", required=False))
+        services.append(_service("audio", "语音识别", "waiting", "正在加载音频模型", "文字消息不受影响", required=False))
     elif audio_value in {"failed", "stopped"}:
         services.append(_service("audio", "语音识别", "warning", "语音识别当前不可用", audio_status.get("message", "请查看 Agent 日志"), required=False))
     else:
         services.append(_service("audio", "语音识别", "waiting", "等待音频模型状态", "文字消息不受影响", required=False))
 
     try:
-        smtp = _smtp_response()
+        smtp = _smtp_response(login_qq)
         if smtp["configured"]:
             services.append(_service("smtp", "QQ 邮箱回复", "ready", f"发件账号 {smtp['selected_sender_qq']} 已配置", required=False))
         else:
@@ -299,7 +344,7 @@ def _system_status() -> dict:
         f"Python {sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
         "请安装 64 位 Python 3.12；当前依赖基线固定为 Python 3.12" if not python_ready else "",
     ))
-    ffmpeg_path = shutil.which("ffmpeg")
+    ffmpeg_path = _which("ffmpeg")
     services.append(_service(
         "ffmpeg", "FFmpeg", "ready" if ffmpeg_path else "warning",
         "语音转换工具已安装" if ffmpeg_path else "未找到 FFmpeg",
@@ -322,7 +367,7 @@ def _system_status() -> dict:
 @app.get("/qcca/system-status")
 def get_system_status():
     """Return one friendly status list for the management page."""
-    return _system_status()
+    return _cached_system_status()
 
 
 @app.get("/qcca/setup")
@@ -358,10 +403,11 @@ def update_setup_config(config: SetupConfigUpdate):
         preferences = config_service.save_preferences(default_agent, setup_completed=True)
     except (OSError, ValueError, config_service.SmtpConfigError) as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+    _invalidate_status_cache()
     return {
         **preferences,
         "login_qq": login_qq,
-        "smtp_configured": _smtp_response()["configured"],
+        "smtp_configured": _smtp_response(login_qq)["configured"],
     }
 
 
@@ -397,6 +443,7 @@ def update_smtp_config(config: SmtpConfigUpdate):
         config_service.save_smtp_config(sender_qq, auth_code)
     except (OSError, config_service.SmtpConfigError) as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+    _invalidate_status_cache()
     return _smtp_response()
 
 
@@ -407,6 +454,7 @@ def select_smtp_config(sender_qq: str):
             raise HTTPException(status_code=404, detail="发件 QQ 配置不存在")
     except (OSError, config_service.SmtpConfigError) as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+    _invalidate_status_cache()
     return _smtp_response()
 
 
@@ -422,12 +470,13 @@ def delete_smtp_config(sender_qq: str):
             raise HTTPException(status_code=404, detail="发件 QQ 配置不存在")
     except (OSError, config_service.SmtpConfigError) as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
-    return _smtp_response()
+    _invalidate_status_cache()
+    return _smtp_response(login_qq)
 
 
 @app.put("/qcca/config/update/{uid}")
 def update_qcca_config(uid: int, user: User):
-    with _config_lock, config_service.user_config_file_lock():
+    with config_service.user_config_file_lock():
         users = _read_users_unlocked()
         if str(uid) not in users:
             raise HTTPException(status_code=404, detail="QQ 用户配置不存在")
@@ -458,7 +507,7 @@ def update_qcca_config(uid: int, user: User):
                     raise HTTPException(status_code=400, detail="会话配置格式无效")
                 if submitted.get("id") != current_session.get("id"):
                     raise HTTPException(status_code=400, detail="会话 ID 由 QCCA 自动管理，不能修改")
-                agent = submitted.get("agent", current_session.get("agent", "codex"))
+                agent = submitted.get("agent", current_session.get("agent", config_service.DEFAULT_AGENT))
                 if not isinstance(agent, str) or agent.lower() not in VALID_AGENTS:
                     raise HTTPException(status_code=400, detail="Agent 类型无效，可选：codex、claude")
                 normalized_sessions[session_name] = {
@@ -486,7 +535,7 @@ def update_qcca_config(uid: int, user: User):
 
 @app.delete("/qcca/config/delete/{uid}")
 def delete_qcca_config(uid: int):
-    with _config_lock, config_service.user_config_file_lock():
+    with config_service.user_config_file_lock():
         users = _read_users_unlocked()
         users.pop(str(uid), None)
         _write_users_unlocked(users)

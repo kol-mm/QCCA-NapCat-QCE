@@ -1,4 +1,9 @@
+import gc
+import sys
 import time
+from collections import deque
+from contextlib import suppress
+from concurrent.futures import ThreadPoolExecutor
 from time import sleep
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler, DirCreatedEvent, FileCreatedEvent
@@ -9,7 +14,6 @@ import shutil
 import subprocess
 import re
 import pysilk
-import wave
 import os
 
 import config_service
@@ -19,6 +23,7 @@ import requests
 
 LOGIN_INFO_URL = "http://127.0.0.1:3000/get_login_info"
 MAX_SESSION_LIST_LINES = 30
+DEFAULT_MAX_PARALLEL_SENDERS = 3
 DEFAULT_WATCH_DIR = os.path.expanduser(r"~\Documents\QQChatExporter\live-capture")
 
 AGENT_REGISTRY = AgentRegistry()
@@ -26,6 +31,8 @@ AGENT_REGISTRY.register(codex_control, "codex")
 AGENT_REGISTRY.register(claude_control, "claude")
 _agent_status_lock = threading.RLock()
 _agent_status_context = {'status': 'not_started', 'message': 'Agent 尚未启动'}
+# Agent calls currently in progress, keyed by sender QQ, in start order.
+_active_agent_runs: dict[str, dict] = {}
 
 
 def get_current_session_context(uid: str):
@@ -125,6 +132,25 @@ def publish_agent_status(status: str, **context) -> None:
             print(f'写入 Agent 状态失败: {e}')
 
 
+def begin_agent_run(uid: str, **context) -> None:
+    """Record a started Agent call and publish it as the running status."""
+    with _agent_status_lock:
+        _active_agent_runs[uid] = context
+        publish_agent_status('running', uid=uid, **context)
+
+
+def end_agent_run(uid: str, status: str, **context) -> None:
+    """Publish a finished call, unless another sender's call is still running."""
+    with _agent_status_lock:
+        _active_agent_runs.pop(uid, None)
+        if _active_agent_runs:
+            # Keep showing the most recently started call that is still busy.
+            other_uid, other_context = next(reversed(_active_agent_runs.items()))
+            publish_agent_status('running', uid=other_uid, **other_context)
+        else:
+            publish_agent_status(status, uid=uid, **context)
+
+
 def heartbeat_agent_status() -> None:
     """Refresh the current status timestamp without changing its context."""
     with _agent_status_lock:
@@ -154,434 +180,639 @@ def save_chat_record(
         # 记录保存失败不应影响原有消息回复流程。
         print(f'保存 QQ {uid} 聊天记录失败: {e}')
 
-def check_login_api() -> bool:
+def get_login_uid():
+    """Return the QQ currently logged in to NapCat, or None if unavailable."""
     try:
         response = requests.get(LOGIN_INFO_URL, timeout=5)
         response.raise_for_status()
-        user_id = response.json().get('data', {}).get('user_id')
-        print(f'登录接口可用，当前 QQ：{user_id}')
-        return True
-    except requests.RequestException as e:
+        return response.json()['data']['user_id']
+    except requests.exceptions.ConnectionError:
+        print("❌连接失败，服务没启动/端口没监听")
+    except Exception as e:
         print(f'登录接口不可用（{LOGIN_INFO_URL}）：{e}')
+    return None
+
+
+def check_login_api() -> bool:
+    user_id = get_login_uid()
+    if user_id is None:
         return False
+    print(f'登录接口可用，当前 QQ：{user_id}')
+    return True
 
 
-def silk_to_wav(silk_path: str, wav_path: str) -> bool:
+# paraformer-zh expects 16 kHz mono input.
+ASR_SAMPLE_RATE = 16000
+
+
+def silk_to_pcm(silk_path: str) -> bytes | None:
+    """Decode a QQ Silk voice file to 16 kHz mono 16-bit PCM in memory."""
     try:
         with open(silk_path, "rb") as source:
             # pysilk 需要文件对象，不能直接传入字节数组。
             output = io.BytesIO()
-            pysilk.decode(source, output, 24000)
-        with wave.open(wav_path, "wb") as wf:
-            wf.setnchannels(1)
-            wf.setsampwidth(2)
-            wf.setframerate(24000)
-            wf.writeframes(output.getvalue())
-        return True
+            pysilk.decode(source, output, ASR_SAMPLE_RATE)
     except Exception as e:
         print(f"pysilk解码异常：{e}")
-        return False
+        return None
+    return output.getvalue() or None
 
 
-def amr_to_16k_wav(amr_path: str, wav_path: str) -> bool:
-    """Silk 解码失败时，回退到 ffmpeg 的 AMR 转码。"""
+def amr_to_pcm(amr_path: str) -> bytes | None:
+    """Silk 解码失败时，回退到 ffmpeg 的 AMR 转码，直接输出 16 kHz PCM。"""
     ffmpeg = shutil.which("ffmpeg")
     if not ffmpeg:
         print("ffmpeg 不在 PATH 中，无法执行 AMR 回退转码")
-        return False
+        return None
     try:
         result = subprocess.run(
             [
                 ffmpeg,
                 "-hide_banner",
                 "-loglevel", "error",
-                "-y",
                 "-i", amr_path,
+                "-f", "s16le",
                 "-acodec", "pcm_s16le",
-                "-ar", "16000",
+                "-ar", str(ASR_SAMPLE_RATE),
                 "-ac", "1",
-                wav_path,
+                "pipe:1",
             ],
+            stdin=subprocess.DEVNULL,
             capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
             timeout=30,
             check=False,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         print(f"AMR 回退转码启动失败：{exc}")
-        return False
+        return None
     if result.returncode != 0:
-        print(f"AMR 回退转码失败：{result.stderr.strip()}")
-        return False
-    return os.path.isfile(wav_path) and os.path.getsize(wav_path) > 44
+        stderr = result.stderr.decode("utf-8", errors="replace").strip()
+        print(f"AMR 回退转码失败：{stderr}")
+        return None
+    return result.stdout or None
 
 
-audio_model = None
-audio_model_ready = threading.Event()
+def pcm_to_waveform(pcm: bytes):
+    """Convert 16-bit PCM to the float32 [-1, 1) samples FunASR accepts.
+
+    Passing samples directly skips writing a temporary WAV next to the QQ
+    media file and FunASR's reload/resample of it.
+    """
+    import numpy as np
+
+    usable = len(pcm) - len(pcm) % 2
+    return np.frombuffer(pcm[:usable], dtype="<i2").astype(np.float32) / 32768.0
 
 
-def load_audio_model() -> None:
-    """后台加载大模型，避免文本命令被模型初始化阻塞。"""
-    global audio_model
-    config_service.update_audio_model_status('loading', '正在加载语音识别模型')
+AUDIO_MODEL_MODES = {'eager', 'lazy', 'off'}
+DEFAULT_AUDIO_MODEL_MODE = 'eager'
+DEFAULT_AUDIO_IDLE_MINUTES = 10
+# How long a voice message waits for another load or transcription to finish.
+AUDIO_MODEL_WAIT_SECONDS = 120
+
+
+def audio_model_mode() -> str:
+    """QCCA_AUDIO_MODEL: eager (load at startup), lazy (on first voice) or off."""
+    mode = os.getenv('QCCA_AUDIO_MODEL', DEFAULT_AUDIO_MODEL_MODE).strip().lower()
+    return mode if mode in AUDIO_MODEL_MODES else DEFAULT_AUDIO_MODEL_MODE
+
+
+def audio_idle_seconds() -> float:
+    """QCCA_AUDIO_IDLE_MINUTES: release the model after this idle time; 0 keeps it."""
     try:
-        from funasr import AutoModel
-        audio_model = AutoModel(model="paraformer-zh", disable_update=True)
-    except Exception as exc:
-        config_service.update_audio_model_status('failed', f'模型加载失败：{exc}')
-        print(f'模型加载失败：{exc}', flush=True)
-        return
-    audio_model_ready.set()
-    config_service.update_audio_model_status('ready', '语音识别模型已就绪')
-    print('模型加载成功', flush=True)
+        minutes = float(os.getenv('QCCA_AUDIO_IDLE_MINUTES', DEFAULT_AUDIO_IDLE_MINUTES))
+    except ValueError:
+        minutes = DEFAULT_AUDIO_IDLE_MINUTES
+    return max(0.0, minutes * 60)
 
 
-def wait_for_audio_file(audio_path: str) -> bool:
-    """等待媒体文件写入完成，跳过空文件和尚未落盘的文件。"""
-    previous_size = -1
-    for _ in range(15):
+class AudioModelDisabled(RuntimeError):
+    """Voice recognition is switched off with QCCA_AUDIO_MODEL=off."""
+
+
+class AudioModelBusy(RuntimeError):
+    """The model is still loading (or busy) after the wait limit."""
+
+
+def load_funasr_model():
+    # Imported here so torch and FunASR are never loaded when voice is off.
+    from funasr import AutoModel
+    return AutoModel(model="paraformer-zh", disable_update=True)
+
+
+def release_torch_cache() -> None:
+    torch = sys.modules.get('torch')
+    if torch is not None and torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+
+class AudioModelManager:
+    """Own the FunASR model: load it when needed and release it when idle.
+
+    The speech model is the largest memory user in QCCA (roughly a gigabyte
+    with its weights), yet many setups only receive text. Loading, inference
+    and release take turns under one lock; FunASR inference is not documented
+    as thread-safe, and senders' messages run in parallel.
+    """
+
+    def __init__(self, mode: str, idle_seconds: float, loader=load_funasr_model):
+        self.mode = mode
+        self.idle_seconds = idle_seconds
+        self._loader = loader
+        self._lock = threading.Lock()
+        self._model = None
+        self._last_used = time.monotonic()
+        self._status = ('not_started', '')
+        # Keeps the heartbeat from re-publishing a status that was just replaced.
+        self._status_lock = threading.Lock()
+
+    @property
+    def loaded(self) -> bool:
+        return self._model is not None
+
+    def start(self) -> None:
+        if self.mode == 'off':
+            self._publish('disabled', '语音识别已按设置关闭（QCCA_AUDIO_MODEL=off）')
+        elif self.mode == 'lazy':
+            self._publish('standby', '收到语音消息时加载语音识别模型')
+        else:
+            # 后台加载，避免文本命令被模型初始化阻塞。
+            threading.Thread(target=self._preload, name='qcca-audio-model', daemon=True).start()
+
+    def _preload(self) -> None:
+        with self._lock:
+            try:
+                self._ensure_loaded()
+            except Exception:
+                pass  # Already reported; the next voice message retries.
+
+    def _ensure_loaded(self):
+        """Return the model, loading it first if needed; the caller holds the lock."""
+        if self._model is None:
+            self._publish('loading', '正在加载语音识别模型')
+            try:
+                self._model = self._loader()
+            except Exception as exc:
+                self._publish('failed', f'模型加载失败：{exc}')
+                print(f'模型加载失败：{exc}', flush=True)
+                raise
+            self._last_used = time.monotonic()
+            self._publish('ready', '语音识别模型已就绪')
+            print('模型加载成功', flush=True)
+        return self._model
+
+    def transcribe(self, waveform):
+        if self.mode == 'off':
+            raise AudioModelDisabled('语音识别已关闭')
+        if not self._lock.acquire(timeout=AUDIO_MODEL_WAIT_SECONDS):
+            raise AudioModelBusy('语音识别模型仍在加载')
         try:
-            current_size = os.path.getsize(audio_path)
+            model = self._ensure_loaded()
+            result = model.generate(input=waveform)
+            self._last_used = time.monotonic()
+            return result
+        finally:
+            self._lock.release()
+
+    def release_if_idle(self) -> bool:
+        """Free the model after the idle limit; a later voice message reloads it."""
+        if not self.idle_seconds or self._model is None:
+            return False
+        if time.monotonic() - self._last_used < self.idle_seconds:
+            return False
+        if not self._lock.acquire(blocking=False):
+            return False  # Loading or transcribing right now.
+        try:
+            if self._model is None or time.monotonic() - self._last_used < self.idle_seconds:
+                return False
+            self._model = None
+            gc.collect()
+            release_torch_cache()
+            self._publish('standby', '空闲时已释放语音识别模型，收到语音消息时自动重新加载')
+            print('语音识别模型空闲，已释放内存', flush=True)
+            return True
+        finally:
+            self._lock.release()
+
+    def heartbeat(self) -> None:
+        with self._status_lock:
+            status, message = self._status
+            if status != 'not_started':
+                self._write_status(status, message)
+
+    def _publish(self, status: str, message: str) -> None:
+        with self._status_lock:
+            self._status = (status, message)
+            self._write_status(status, message)
+
+    @staticmethod
+    def _write_status(status: str, message: str) -> None:
+        try:
+            config_service.update_audio_model_status(status, message)
+        except OSError as e:
+            print(f'写入语音模型状态失败: {e}')
+
+
+audio_models = AudioModelManager(audio_model_mode(), audio_idle_seconds())
+
+
+def wait_for_stable_size(path: str, attempts: int, require_content: bool) -> bool:
+    """等待文件大小连续两次一致，表示导出程序已完成写入。"""
+    previous_size = -1
+    for _ in range(attempts):
+        try:
+            current_size = os.path.getsize(path)
         except OSError:
             current_size = -1
-        if current_size > 0 and current_size == previous_size:
+        if current_size == previous_size and (current_size > 0 or not require_content):
             return True
         previous_size = current_size
         sleep(0.2)
     return False
+
+
+def wait_for_audio_file(audio_path: str) -> bool:
+    """等待媒体文件写入完成，跳过空文件和尚未落盘的文件。"""
+    return wait_for_stable_size(audio_path, 15, require_content=True)
+
+
+def read_sender_uid(path: str) -> str | None:
+    """Return the sender QQ of the last well-formed message in a capture file."""
+    sender_uid = None
+    with open(path, 'r', encoding='utf-8') as file:
+        for line in file:
+            try:
+                data = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            message = data.get('message') if isinstance(data, dict) else None
+            sender = message.get('sender') if isinstance(message, dict) else None
+            content = message.get('content') if isinstance(message, dict) else None
+            if not isinstance(sender, dict) or not isinstance(content, dict):
+                continue
+            elements = content.get('elements')
+            uid = str(sender.get('uin') or '')
+            if uid and isinstance(elements, list) and elements:
+                sender_uid = uid
+    return sender_uid
+
+
+def max_parallel_senders() -> int:
+    try:
+        return max(1, int(os.getenv('QCCA_MAX_PARALLEL_SENDERS', DEFAULT_MAX_PARALLEL_SENDERS)))
+    except ValueError:
+        return DEFAULT_MAX_PARALLEL_SENDERS
+
+
+class PerSenderDispatcher:
+    """Run different senders' messages in parallel, each sender's in order.
+
+    A single Agent call can take minutes; without this, one user's request
+    would hold up every other user's messages behind it.
+    """
+
+    def __init__(self, max_workers: int):
+        self._executor = ThreadPoolExecutor(
+            max_workers=max_workers, thread_name_prefix='qcca-sender'
+        )
+        self._lock = threading.Lock()
+        self._queues: dict[str, deque] = {}
+
+    def submit(self, key: str, func, *args) -> None:
+        with self._lock:
+            queue = self._queues.get(key)
+            if queue is not None:
+                # A worker is already draining this sender; it will pick this up.
+                queue.append((func, args))
+                return
+            self._queues[key] = deque([(func, args)])
+        self._executor.submit(self._drain, key)
+
+    def _drain(self, key: str) -> None:
+        while True:
+            with self._lock:
+                queue = self._queues[key]
+                if not queue:
+                    del self._queues[key]
+                    return
+                func, args = queue.popleft()
+            try:
+                func(*args)
+            except Exception as exc:
+                # Logging must not end this loop: the sender's queue would
+                # stay registered and their later messages would never run.
+                with suppress(Exception):
+                    print(f'处理 QQ {key} 的消息失败: {exc}')
+
+    def shutdown(self) -> None:
+        self._executor.shutdown(wait=False, cancel_futures=True)
+
+
 class myFileSystemEventHandler(FileSystemEventHandler):
-    def __init__(self):
+    def __init__(self, dispatcher: PerSenderDispatcher | None = None):
         super().__init__()
         # 按发送者保存待应用的切换参数，避免不同 QQ 用户互相覆盖。
+        # Each sender's messages are processed in order by one worker at a
+        # time, so a sender's entry is never touched by two threads at once.
         self.user_params = {}
-
+        self.dispatcher = dispatcher
 
     def on_created(self, event: DirCreatedEvent | FileCreatedEvent) -> None:
-        print('获取接收方信息')
-        url = LOGIN_INFO_URL
-
+        # Media files, temporary WAVs and directories also land in the watch
+        # tree; filter them before touching the NapCat HTTP API.
+        if event.is_directory or not event.src_path.endswith('.jsonl'):
+            return
+        print(f'文件{event.src_path}被创建')
         try:
-            resp = requests.get(url, timeout=5)
-            resp.raise_for_status()  # 如果http错误(404/500)抛异常
-            print(resp.status_code)
-            resp_data=resp.json()
-            print(resp_data)
-            receive_uid=resp_data['data']['user_id']
-            # 返回json直接解析
-        except requests.exceptions.ConnectionError:
-            print("❌连接失败，服务没启动/端口没监听")
+            # 等待导出程序完成写入，避免读取到半条 JSONL。
+            wait_for_stable_size(event.src_path, 10, require_content=False)
+            sender_uid = read_sender_uid(event.src_path)
+        except (OSError, UnicodeDecodeError) as e:
+            print(f'文件{event.src_path}读取失败:{e}')
             return
+        if not sender_uid:
+            print(f'文件{event.src_path}没有可处理的消息')
+            return
+        if self.dispatcher is None:
+            self.process_file(event.src_path)
+        else:
+            self.dispatcher.submit(sender_uid, self.process_file, event.src_path)
+
+    def process_file(self, path: str) -> None:
+        print(f'处理文件{path}，获取接收方信息')
+        receive_uid = get_login_uid()
+        if receive_uid is None:
+            return
+        data_list=[]
+        try:
+            with open(path,'r',encoding='utf-8') as f1:
+                for line in f1:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        data=json.loads(line)
+                    except json.decoder.JSONDecodeError:
+                        continue
+                    if not isinstance(data, dict):
+                        continue
+                    message = data.get('message')
+                    if not isinstance(message, dict):
+                        print('消息缺少 message 字段，已跳过')
+                        continue
+                    sender = message.get('sender')
+                    content = message.get('content')
+                    if not isinstance(sender, dict) or not isinstance(content, dict):
+                        print('消息格式不完整，已跳过')
+                        continue
+                    send_uid = str(sender.get('uin') or '')
+                    elements = content.get('elements')
+                    if not send_uid or not isinstance(elements, list) or not elements:
+                        print('消息缺少发送者或内容元素，已跳过')
+                        continue
+                    first_element = elements[0] if isinstance(elements[0], dict) else {}
+                    message_type = first_element.get('type')
+                    print(send_uid)
+                    if message_type == 'text':
+                        text = content.get('text')
+                        if text:
+                            data_list.append(str(text))
+                            print(f'文件{path}读取成功')
+                    elif message_type == 'audio':
+                        media = data.get('media')
+                        audio_path = (
+                            media[0].get('localPath')
+                            if isinstance(media, list) and media and isinstance(media[0], dict)
+                            else None
+                        )
+                        if not isinstance(audio_path, str) or not wait_for_audio_file(audio_path):
+                            send_email(receive_uid, send_uid, '语音文件尚未准备完成，请稍后重发。')
+                            return
+                        if audio_models.mode == 'off':
+                            send_email(receive_uid, send_uid, '语音识别已关闭，请发送文字消息。')
+                            return
+                        try:
+                            pcm = silk_to_pcm(audio_path)
+                            if not pcm:
+                                print('Silk 解码失败，尝试 AMR 回退转码')
+                                pcm = amr_to_pcm(audio_path)
+                            if not pcm:
+                                send_email(receive_uid, send_uid, '语音解码失败，暂时无法识别该语音。')
+                                return
+                            waveform = pcm_to_waveform(pcm)
+                            text_list = audio_models.transcribe(waveform)
+                            text = text_list[0].get('text') if text_list and isinstance(text_list[0], dict) else ''
+                            data_list.append(text or '未识别到内容')
+                            print(f'识别内容为:{text}')
+                        except AudioModelBusy:
+                            send_email(receive_uid, send_uid, '语音识别模型仍在加载，请稍后重发。')
+                            return
+                        except Exception as e:
+                            print(f'文件{path}语音识别失败:{e}')
+                            send_email(receive_uid, send_uid, '语音识别失败，请稍后重试。')
+                            return
+                combined_text = ''.join(data_list)
+                command = combined_text.strip().lower()
+                if command == '/help':
+                    available_agents = '、'.join(sorted(AGENT_REGISTRY.agent_dict))
+                    send_email(
+                        receive_uid,
+                        send_uid,
+                        'QCCA命令帮助：\n'
+                        '/help - 查看帮助\n'
+                        '/status - 查看当前工作区和会话\n'
+                        '/sessions - 列出已保存的工作区和会话\n'
+                        '/cancel - 仅取消待生效的切换参数，不会结束当前会话\n'
+                        '/agent - 查看当前 Agent 和可用 Agent\n'
+                        '/agent=codex 或 /agent=claude - 下一条消息使用指定 Agent\n'
+                        '/workspace="路径" session=会话 sandbox=权限 agent=Agent - 切换工作区、会话和 Agent\n'
+                        'sandbox 可选：read-only、workspace-write、danger-full-access\n'
+                        f'当前可用 Agent：{available_agents}\n'
+                        '发送切换命令后，再发送一条普通消息即可生效。',
+                    )
+                    return
+                if command == '/agent':
+                    current = get_current_session_context(send_uid) or {}
+                    pending = self.user_params.get(send_uid, {})
+                    current_agent = pending.get('agent') or current.get('agent') or 'codex'
+                    available_agents = '、'.join(sorted(AGENT_REGISTRY.agent_dict))
+                    suffix = '（待下一条消息生效）' if pending.get('agent') else ''
+                    send_email(
+                        receive_uid,
+                        send_uid,
+                        f'当前 Agent：{current_agent}{suffix}\n'
+                        f'可用 Agent：{available_agents}\n'
+                        '切换方式：/agent=codex 或 /agent=claude',
+                    )
+                    return
+                if command == '/cancel':
+                    self.user_params.pop(send_uid, None)
+                    send_email(receive_uid, send_uid, '已取消待生效的切换参数。')
+                    return
+                if command in {'/status', '/sessions'}:
+                    user = config_service.dict_user_exist(send_uid)
+                    if not user:
+                        send_email(receive_uid, send_uid, '当前 QQ 还没有保存的工作区或会话。')
+                        return
+                    if command == '/status':
+                        workspace, _ = config_service.get_user_recent_session(user)
+                        recent = user.get('recent_workspace_and_session', {})
+                        session = recent.get(workspace) if workspace else None
+                        workspace_data = user.get('workspaces', {}).get(workspace, {})
+                        sandbox = workspace_data.get('sandbox')
+                        session_data = workspace_data.get('sessions', {}).get(session, {})
+                        agent = config_service.session_agent(session_data)
+                        send_email(receive_uid, send_uid,
+                                   f'当前工作区：{workspace or "未设置"}\n'
+                                   f'当前会话：{session or "未设置"}\n'
+                                   f'当前 Agent：{agent}\n'
+                                   f'沙箱权限：{sandbox or "read-only"}')
+                    else:
+                        lines = ['已保存的工作区和会话：']
+                        for workspace, data in user.get('workspaces', {}).items():
+                            session_items = []
+                            for name, value in data.get('sessions', {}).items():
+                                sid = config_service.session_id(value)
+                                agent = config_service.session_agent(value)
+                                label = f'{name}（{sid}）' if sid else str(name)
+                                session_items.append(f'{label} [{agent}]')
+                            sessions = ', '.join(session_items)
+                            lines.append(f'- {workspace}: {sessions or "无会话"}')
+                            if len(lines) >= MAX_SESSION_LIST_LINES:
+                                lines.append('... 内容过长，已截断。')
+                                break
+                        send_email(receive_uid, send_uid, '\n'.join(lines))
+                    return
+                if config_service.is_sandbox_command(combined_text):
+                    parse_sandbox_params_dict = config_service.parse_sandbox_params(combined_text)
+                    if any(value is not None for value in parse_sandbox_params_dict.values()):
+                        # Merge partial switch commands so /agent and
+                        # /workspace commands can be sent separately.
+                        pending = self.user_params.get(send_uid, {})
+                        pending = {
+                            key: pending.get(key)
+                            for key in ("workspace", "sandbox", "session", "agent")
+                        }
+                        for key, value in parse_sandbox_params_dict.items():
+                            if value is not None:
+                                pending[key] = value
+                        self.user_params[send_uid] = pending
+                        send_email(receive_uid, send_uid,
+                                   f'读到有效配置，workspace:{pending["workspace"]},'
+                                   f'sandbox:{pending["sandbox"]},'
+                                   f'session:{pending["session"]},'
+                                   f'agent:{pending["agent"]}')
+                        return
+                    else:
+                        if re.search(r'\bagent=', combined_text, re.IGNORECASE):
+                            send_email(receive_uid, send_uid, 'Agent 无效，可选：codex、claude。')
+                            return
+                        send_email(receive_uid, send_uid, '未读到有效配置')
+                        return
+                elif combined_text.strip().startswith('/'):
+                    send_email(receive_uid, send_uid, '未知指令。发送 /help 查看可用命令。')
+                    return
+                else:
+                    print('准备调用agent')
+                    # 调用agent获取agent输出
+                    if not data_list or not send_uid:
+                        print('没有可处理的消息')
+                        return
+                    params = self.user_params.pop(send_uid, {})
+                    current = get_current_session_context(send_uid) or {}
+                    target = get_target_session_context(
+                        send_uid,
+                        params.get('workspace'),
+                        params.get('session'),
+                        params.get('agent'),
+                    )
+                    agent_name = target.get('agent') or 'codex'
+                    agent_control = AGENT_REGISTRY.get_agent(agent_name)
+                    if agent_control is None:
+                        print(f'未知 Agent 类型 {agent_name}，回退到 codex')
+                        agent_name = 'codex'
+                        agent_control = AGENT_REGISTRY.get_agent(agent_name)
+                    if agent_control is None:
+                        send_email(receive_uid, send_uid, '没有可用的编码 Agent。')
+                        return
+                    begin_agent_run(
+                        send_uid,
+                        workspace=target.get('workspace') or current.get('workspace'),
+                        session=target.get('session') or '待创建',
+                        session_id=target.get('session_id'),
+                        agent=agent_name,
+                        message=f'正在调用 {agent_name} Agent',
+                    )
+                    try:
+                        agent_text = agent_control(
+                            send_uid,
+                            combined_text,
+                            params.get('workspace'),
+                            params.get('session'),
+                            params.get('sandbox'),
+                            agent=agent_name,
+                        )
+                    except Exception as exc:
+                        failed = get_current_session_context(send_uid) or current
+                        end_agent_run(
+                            send_uid,
+                            'failed',
+                            workspace=failed.get('workspace') or target.get('workspace'),
+                            session=failed.get('session') or target.get('session'),
+                            session_id=failed.get('session_id') or target.get('session_id'),
+                            agent=agent_name,
+                            message=f'Agent 调用失败：{exc}',
+                        )
+                        print(f'Agent 调用失败：{exc}')
+                        send_email(receive_uid, send_uid, f'Agent 调用失败：{exc}')
+                        return
+                    finished = get_current_session_context(send_uid) or current
+                    finished_agent = finished.get('agent') or agent_name
+                    end_agent_run(
+                        send_uid,
+                        'idle',
+                        workspace=finished.get('workspace'),
+                        session=finished.get('session'),
+                        session_id=finished.get('session_id'),
+                        agent=finished_agent,
+                        message='Agent 空闲',
+                    )
+                    print(agent_text)
+                    target_matches_finished = (
+                        target.get('workspace') == finished.get('workspace')
+                        and target.get('session') == finished.get('session')
+                    )
+                    record_session_id = target.get('session_id')
+                    if target_matches_finished:
+                        record_session_id = record_session_id or finished.get('session_id')
+                    if record_session_id:
+                        save_chat_record(
+                            send_uid,
+                            combined_text,
+                            agent_text,
+                            record_session_id,
+                        )
+                    else:
+                        print('目标会话未成功落盘，跳过聊天记录保存')
+                    send_email(receive_uid, send_uid, agent_text)
         except Exception as e:
-            print("异常：", e)
-            return
-        if not event.is_directory:
-            print(f'文件{event.src_path}被创建')
-            if event.src_path.endswith('.jsonl'):
-                print('文件格式为jsonl')
-                data_list=[]
-                # 等待导出程序完成写入，避免读取到半条 JSONL。
-                previous_size = -1
-                for _ in range(10):
-                    current_size = os.path.getsize(event.src_path)
-                    if current_size == previous_size:
-                        break
-                    previous_size = current_size
-                    sleep(0.2)
-                try:
-                    with open(event.src_path,'r',encoding='utf-8') as f1:
-                        for line in f1:
-                            line = line.strip()
-                            print(line)
-                            if not line:
-                                continue
-                            try:
-                                data=json.loads(line)
-                            except json.decoder.JSONDecodeError:
-                                continue
-                            message = data.get('message')
-                            if not isinstance(message, dict):
-                                print('消息缺少 message 字段，已跳过')
-                                continue
-                            sender = message.get('sender')
-                            content = message.get('content')
-                            if not isinstance(sender, dict) or not isinstance(content, dict):
-                                print('消息格式不完整，已跳过')
-                                continue
-                            send_uid = str(sender.get('uin') or '')
-                            elements = content.get('elements')
-                            if not send_uid or not isinstance(elements, list) or not elements:
-                                print('消息缺少发送者或内容元素，已跳过')
-                                continue
-                            first_element = elements[0] if isinstance(elements[0], dict) else {}
-                            message_type = first_element.get('type')
-                            print(send_uid)
-                            if message_type == 'text':
-                                text = content.get('text')
-                                if text:
-                                    data_list.append(str(text))
-                                    print(f'文件{event.src_path}读取成功')
-                            elif message_type == 'audio':
-                                media = data.get('media')
-                                audio_path = (
-                                    media[0].get('localPath')
-                                    if isinstance(media, list) and media and isinstance(media[0], dict)
-                                    else None
-                                )
-                                if not isinstance(audio_path, str) or not wait_for_audio_file(audio_path):
-                                    send_email(receive_uid, send_uid, '语音文件尚未准备完成，请稍后重发。')
-                                    return
-                                if not audio_model_ready.wait(timeout=120):
-                                    send_email(receive_uid, send_uid, '语音识别模型仍在加载，请稍后重发。')
-                                    return
-                                wav_path = os.path.splitext(audio_path)[0] + '.wav'
-                                try:
-                                    decoded = silk_to_wav(audio_path, wav_path)
-                                    if not decoded:
-                                        print('Silk 解码失败，尝试 AMR 回退转码')
-                                        decoded = amr_to_16k_wav(audio_path, wav_path)
-                                    if not decoded:
-                                        send_email(receive_uid, send_uid, '语音解码失败，暂时无法识别该语音。')
-                                        return
-                                    text_list = audio_model.generate(input=wav_path)
-                                    text = text_list[0].get('text') if text_list and isinstance(text_list[0], dict) else ''
-                                    data_list.append(text or '未识别到内容')
-                                    print(f'识别内容为:{text}')
-                                except Exception as e:
-                                    print(f'文件{event.src_path}语音识别失败:{e}')
-                                    send_email(receive_uid, send_uid, '语音识别失败，请稍后重试。')
-                                    return
-                                finally:
-                                    try:
-                                        if os.path.exists(wav_path):
-                                            os.remove(wav_path)
-                                    except OSError as e:
-                                        print(f'清理临时语音文件失败: {e}')
-                        parse_sandbox_params_dict=config_service.parse_sandbox_params(''.join(data_list))
-                        combined_text = ''.join(data_list)
-                        command = combined_text.strip().lower()
-                        if command == '/help':
-                            available_agents = '、'.join(sorted(AGENT_REGISTRY.agent_dict))
-                            send_email(
-                                receive_uid,
-                                send_uid,
-                                'QCCA命令帮助：\n'
-                                '/help - 查看帮助\n'
-                                '/status - 查看当前工作区和会话\n'
-                                '/sessions - 列出已保存的工作区和会话\n'
-                                '/cancel - 仅取消待生效的切换参数，不会结束当前会话\n'
-                                '/agent - 查看当前 Agent 和可用 Agent\n'
-                                '/agent=codex 或 /agent=claude - 下一条消息使用指定 Agent\n'
-                                '/workspace="路径" session=会话 sandbox=权限 agent=Agent - 切换工作区、会话和 Agent\n'
-                                'sandbox 可选：read-only、workspace-write、danger-full-access\n'
-                                f'当前可用 Agent：{available_agents}\n'
-                                '发送切换命令后，再发送一条普通消息即可生效。',
-                            )
-                            return
-                        if command == '/agent':
-                            current = get_current_session_context(send_uid) or {}
-                            pending = self.user_params.get(send_uid, {})
-                            current_agent = pending.get('agent') or current.get('agent') or 'codex'
-                            available_agents = '、'.join(sorted(AGENT_REGISTRY.agent_dict))
-                            suffix = '（待下一条消息生效）' if pending.get('agent') else ''
-                            send_email(
-                                receive_uid,
-                                send_uid,
-                                f'当前 Agent：{current_agent}{suffix}\n'
-                                f'可用 Agent：{available_agents}\n'
-                                '切换方式：/agent=codex 或 /agent=claude',
-                            )
-                            return
-                        if command == '/cancel':
-                            self.user_params.pop(send_uid, None)
-                            send_email(receive_uid, send_uid, '已取消待生效的切换参数。')
-                            return
-                        if command in {'/status', '/sessions'}:
-                            user = config_service.dict_user_exist(send_uid)
-                            if not user:
-                                send_email(receive_uid, send_uid, '当前 QQ 还没有保存的工作区或会话。')
-                                return
-                            if command == '/status':
-                                workspace, _ = config_service.get_user_recent_session(user)
-                                recent = user.get('recent_workspace_and_session', {})
-                                session = recent.get(workspace) if workspace else None
-                                workspace_data = user.get('workspaces', {}).get(workspace, {})
-                                sandbox = workspace_data.get('sandbox')
-                                session_data = workspace_data.get('sessions', {}).get(session, {})
-                                agent = config_service.session_agent(session_data)
-                                send_email(receive_uid, send_uid,
-                                           f'当前工作区：{workspace or "未设置"}\n'
-                                           f'当前会话：{session or "未设置"}\n'
-                                           f'当前 Agent：{agent}\n'
-                                           f'沙箱权限：{sandbox or "read-only"}')
-                            else:
-                                lines = ['已保存的工作区和会话：']
-                                for workspace, data in user.get('workspaces', {}).items():
-                                    session_items = []
-                                    for name, value in data.get('sessions', {}).items():
-                                        sid = config_service.session_id(value)
-                                        agent = config_service.session_agent(value)
-                                        label = f'{name}（{sid}）' if sid else str(name)
-                                        session_items.append(f'{label} [{agent}]')
-                                    sessions = ', '.join(session_items)
-                                    lines.append(f'- {workspace}: {sessions or "无会话"}')
-                                    if len(lines) >= MAX_SESSION_LIST_LINES:
-                                        lines.append('... 内容过长，已截断。')
-                                        break
-                                send_email(receive_uid, send_uid, '\n'.join(lines))
-                            return
-                        if config_service.is_sandbox_command(combined_text):
-                            if parse_sandbox_params_dict != {
-                                "workspace": None,
-                                "sandbox": None,
-                                "session": None,
-                                "agent": None,
-                            }:
-                                # Merge partial switch commands so /agent and
-                                # /workspace commands can be sent separately.
-                                pending = self.user_params.get(send_uid, {})
-                                pending = {
-                                    key: pending.get(key)
-                                    for key in ("workspace", "sandbox", "session", "agent")
-                                }
-                                for key, value in parse_sandbox_params_dict.items():
-                                    if value is not None:
-                                        pending[key] = value
-                                self.user_params[send_uid] = pending
-                                send_email(receive_uid, send_uid,
-                                           f'读到有效配置，workspace:{pending["workspace"]},'
-                                           f'sandbox:{pending["sandbox"]},'
-                                           f'session:{pending["session"]},'
-                                           f'agent:{pending["agent"]}')
-                                return
-                            else:
-                                if re.search(r'\bagent=', combined_text, re.IGNORECASE):
-                                    send_email(receive_uid, send_uid, 'Agent 无效，可选：codex、claude。')
-                                    return
-                                send_email(receive_uid, send_uid, '未读到有效配置')
-                                return
-                        elif combined_text.strip().startswith('/'):
-                            send_email(receive_uid, send_uid, '未知指令。发送 /help 查看可用命令。')
-                            return
-                        else:
-                            print('准备调用agent')
-                            # 调用agent获取agent输出
-                            if not data_list or not send_uid:
-                                print('没有可处理的消息')
-                                return
-                            params = self.user_params.pop(send_uid, {})
-                            current = get_current_session_context(send_uid) or {}
-                            target = get_target_session_context(
-                                send_uid,
-                                params.get('workspace'),
-                                params.get('session'),
-                                params.get('agent'),
-                            )
-                            agent_name = target.get('agent') or 'codex'
-                            agent_control = AGENT_REGISTRY.get_agent(agent_name)
-                            if agent_control is None:
-                                print(f'未知 Agent 类型 {agent_name}，回退到 codex')
-                                agent_name = 'codex'
-                                agent_control = AGENT_REGISTRY.get_agent(agent_name)
-                            if agent_control is None:
-                                send_email(receive_uid, send_uid, '没有可用的编码 Agent。')
-                                return
-                            publish_agent_status(
-                                'running',
-                                uid=send_uid,
-                                workspace=target.get('workspace') or current.get('workspace'),
-                                session=target.get('session') or '待创建',
-                                session_id=target.get('session_id'),
-                                agent=agent_name,
-                                message=f'正在调用 {agent_name} Agent',
-                            )
-                            try:
-                                agent_text = agent_control(
-                                    send_uid,
-                                    combined_text,
-                                    params.get('workspace'),
-                                    params.get('session'),
-                                    params.get('sandbox'),
-                                    agent=agent_name,
-                                )
-                            except Exception as exc:
-                                failed = get_current_session_context(send_uid) or current
-                                publish_agent_status(
-                                    'failed',
-                                    uid=send_uid,
-                                    workspace=failed.get('workspace') or target.get('workspace'),
-                                    session=failed.get('session') or target.get('session'),
-                                    session_id=failed.get('session_id') or target.get('session_id'),
-                                    agent=agent_name,
-                                    message=f'Agent 调用失败：{exc}',
-                                )
-                                print(f'Agent 调用失败：{exc}')
-                                send_email(receive_uid, send_uid, f'Agent 调用失败：{exc}')
-                                return
-                            finished = get_current_session_context(send_uid) or current
-                            finished_agent = finished.get('agent') or agent_name
-                            publish_agent_status(
-                                'idle',
-                                uid=send_uid,
-                                workspace=finished.get('workspace'),
-                                session=finished.get('session'),
-                                session_id=finished.get('session_id'),
-                                agent=finished_agent,
-                                message='Agent 空闲',
-                            )
-                            # print(''.join(data_list))
-                            print(agent_text)
-                            target_matches_finished = (
-                                target.get('workspace') == finished.get('workspace')
-                                and target.get('session') == finished.get('session')
-                            )
-                            record_session_id = target.get('session_id')
-                            if target_matches_finished:
-                                record_session_id = record_session_id or finished.get('session_id')
-                            if record_session_id:
-                                save_chat_record(
-                                    send_uid,
-                                    combined_text,
-                                    agent_text,
-                                    record_session_id,
-                                )
-                            else:
-                                print('目标会话未成功落盘，跳过聊天记录保存')
-                            send_email(receive_uid, send_uid, agent_text)
-                except Exception as e:
-                    print(f'文件{event.src_path}处理失败:{e}')
-            # 被优化了
-            # if event.src_path.endswith('.amr'):
-            #     print('文件格式为amr')
-            #     # 处理amr文件
-            #     sleep(1)
-            #     if(silk_to_wav(event.src_path,event.src_path.replace('.amr','.wav'))):
-            #         print('amr转wav成功')
-            #         # 处理wav文件
-            #         text_dict=  model.generate(input=event.src_path.replace('.amr','.wav'))
-            #         try:
-            #             text=text_dict[0]['text'] if text_dict[0]['text']!=''and text_dict[0]['text']!=None else '未识别到内容'
-            #             print('识别的内容为:'+text)
-            #         except Exception as e:
-            #             print(f'生成失败{e}')
-            #     else:
-            #         print('amr转wav失败')
+            print(f'文件{path}处理失败:{e}')
+
+
 if __name__ == '__main__':
     print('程序开始', flush=True)
     check_login_api()
     publish_agent_status('idle', message='Agent 已启动')
-    threading.Thread(target=load_audio_model, name='qcca-audio-model', daemon=True).start()
-    #创建系统目录
-    work_path=os.path.expanduser(r'~\.qq-chat-exporter\qcca')
-    record_path = os.path.join(work_path, 'record')
-    os.makedirs(work_path,exist_ok=True)
-    os.makedirs(record_path,exist_ok=True)
-    #创建工作目录
-    os.makedirs(work_path+r'\workspace',exist_ok=True)
-    with open(work_path+r'\workspace\config.json','a',encoding='utf-8') as f:
-        pass
-    myhandler=myFileSystemEventHandler()
+    print(f'语音识别模式：{audio_models.mode}，空闲释放：'
+          f'{audio_models.idle_seconds / 60:g} 分钟', flush=True)
+    audio_models.start()
+    # 创建记录目录；config_dir_file() 同时创建工作目录和空配置文件。
+    os.makedirs(os.path.join(config_service.qcca_home(), 'record'), exist_ok=True)
+    config_service.config_dir_file()
+    workers = max_parallel_senders()
+    dispatcher = PerSenderDispatcher(workers)
+    print(f'并行处理的发送者上限：{workers}', flush=True)
+    myhandler=myFileSystemEventHandler(dispatcher)
     print('开始监听文件夹', flush=True)
     observer = Observer()
     watch_dir = os.path.abspath(os.path.expandvars(
@@ -599,8 +830,9 @@ if __name__ == '__main__':
         while True:
             time.sleep(1)
             now = time.monotonic()
-            if audio_model_ready.is_set() and now - audio_heartbeat_at >= 5:
-                config_service.update_audio_model_status('ready', '语音识别模型已就绪')
+            if now - audio_heartbeat_at >= 5:
+                audio_models.release_if_idle()
+                audio_models.heartbeat()
                 audio_heartbeat_at = now
             if now - agent_heartbeat_at >= 5:
                 heartbeat_agent_status()
@@ -610,6 +842,7 @@ if __name__ == '__main__':
         print("\n准备停止监听")
         publish_agent_status('stopped', message='Agent 已停止')
         observer.stop()
+        dispatcher.shutdown()
 
         observer.join()  # 等待observer线程完全结束
         print("程序退出")

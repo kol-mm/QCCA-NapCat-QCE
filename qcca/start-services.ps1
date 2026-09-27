@@ -220,12 +220,19 @@ function Stop-StartedService {
 }
 
 function Test-PythonImports {
-    param([string[]]$Modules, [string]$ErrorLog = "")
-    $importStatement = "import " + ($Modules -join ", ")
+    param([string[]]$Modules, [string]$ErrorLog = "", [string[]]$PresenceOnly = @())
+    # Modules in -PresenceOnly are only located, not imported. Importing torch
+    # and FunASR takes several seconds, and the Agent loads them lazily in a
+    # background thread anyway, so a full import here only delays startup.
+    $importModules = @($Modules | Where-Object { $_ -notin $PresenceOnly })
+    $script = "import importlib.util, sys; missing = [name for name in sys.argv[1:] if importlib.util.find_spec(name) is None]; missing and sys.exit('Missing modules: ' + ', '.join(missing))"
+    if ($importModules.Count -gt 0) {
+        $script = "import " + ($importModules -join ", ") + "; " + $script
+    }
     $previousErrorAction = $ErrorActionPreference
     $ErrorActionPreference = "SilentlyContinue"
     try {
-        $importOutput = @(& $PythonPath -c $importStatement 2>&1)
+        $importOutput = @(& $PythonPath -c $script @PresenceOnly 2>&1)
         $exitCode = $LASTEXITCODE
     } finally {
         $ErrorActionPreference = $previousErrorAction
@@ -352,7 +359,14 @@ if (-not $apiReady) {
 Write-Host "[Info] QCCA API self-check passed."
 Write-Diagnostic $startupLog "[Self-check] QCCA API is healthy: $healthUrl"
 
-if (-not (Test-PythonImports @("watchdog", "funasr", "pysilk", "torch", "torchaudio", "requests") $agentErr)) {
+$agentModules = @("watchdog", "funasr", "pysilk", "torch", "torchaudio", "requests")
+$agentHeavyModules = @("funasr", "torch", "torchaudio")
+# With voice recognition switched off the Agent never loads the speech stack.
+if ("$env:QCCA_AUDIO_MODEL".Trim().ToLowerInvariant() -eq "off") {
+    $agentModules = @($agentModules | Where-Object { $_ -notin $agentHeavyModules })
+    $agentHeavyModules = @()
+}
+if (-not (Test-PythonImports $agentModules $agentErr $agentHeavyModules)) {
     if (-not (Install-Requirements (Join-Path $QccaDirectory "requirements.txt") $agentErr "Agent")) {
         Write-Diagnostic $agentErr "[Agent] Agent dependencies failed to install; Agent was not started."
         Get-Content -LiteralPath $agentErr -Tail 25 | ForEach-Object { Write-Host $_ }
@@ -360,7 +374,7 @@ if (-not (Test-PythonImports @("watchdog", "funasr", "pysilk", "torch", "torchau
         $env:PYTHONUTF8 = $previousPythonUtf8
         exit 1
     }
-    if (-not (Test-PythonImports @("watchdog", "funasr", "pysilk", "torch", "torchaudio", "requests") $agentErr)) {
+    if (-not (Test-PythonImports $agentModules $agentErr $agentHeavyModules)) {
         Write-Diagnostic $agentErr "[Agent] Dependencies were installed, but one or more Agent modules still cannot be imported."
         Get-Content -LiteralPath $agentErr -Tail 25 | ForEach-Object { Write-Host $_ }
         Stop-StartedService $apiProcess "api"

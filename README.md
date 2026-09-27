@@ -147,7 +147,9 @@ QCCA 的用户、工作区和会话配置文件：
 %USERPROFILE%\Documents\QQChatExporter\live-capture
 ```
 
-启动前可设置 `QCCA_WATCH_DIR` 环境变量修改监听目录；设置 `QCCA_API_PORT` 修改 QCCA API 端口。
+启动前可设置 `QCCA_WATCH_DIR` 环境变量修改监听目录；设置 `QCCA_API_PORT` 修改 QCCA API 端口；设置 `QCCA_MAX_PARALLEL_SENDERS` 修改可同时处理的发送者数量（默认 3，同一发送者的消息始终按顺序处理）。
+
+语音识别模型约占用 1 GB 内存，可用以下环境变量控制：`QCCA_AUDIO_MODEL=eager`（默认，启动时加载）、`lazy`（收到第一条语音时加载）或 `off`（关闭语音识别，不加载 PyTorch 与模型）；`QCCA_AUDIO_IDLE_MINUTES` 设置连续多少分钟没有语音消息后释放模型（默认 10，设为 0 表示一直保留），之后收到语音会自动重新加载。
 
 ## 本地地址与端口
 
