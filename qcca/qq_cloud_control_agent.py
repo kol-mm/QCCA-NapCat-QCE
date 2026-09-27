@@ -1,5 +1,6 @@
 import time
 from collections import deque
+from contextlib import suppress
 from concurrent.futures import ThreadPoolExecutor
 from time import sleep
 from watchdog.observers import Observer
@@ -357,7 +358,10 @@ class PerSenderDispatcher:
             try:
                 func(*args)
             except Exception as exc:
-                print(f'处理 QQ {key} 的消息失败: {exc}')
+                # Logging must not end this loop: the sender's queue would
+                # stay registered and their later messages would never run.
+                with suppress(Exception):
+                    print(f'处理 QQ {key} 的消息失败: {exc}')
 
     def shutdown(self) -> None:
         self._executor.shutdown(wait=False, cancel_futures=True)

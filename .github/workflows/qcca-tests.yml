@@ -18,6 +18,10 @@ jobs:
     # QCCA ships for Windows x64 only; this also exercises the msvcrt file lock.
     runs-on: windows-latest
     timeout-minutes: 15
+    env:
+      # Same as start-services.ps1: log output contains Chinese text, which
+      # the runner's default cp1252 console encoding cannot print.
+      PYTHONUTF8: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
