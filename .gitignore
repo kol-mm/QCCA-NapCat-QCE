@@ -21,6 +21,8 @@ build/
 qcca/workspace/
 qcca/**/smtp.json
 qcca/test.py
+# 在非 Windows 系统运行测试时，未展开的 ~\.qq-chat-exporter 路径会生成的目录
+/~*
 qcca/*.wav
 qcca/*.amr
 qcca/*.silk

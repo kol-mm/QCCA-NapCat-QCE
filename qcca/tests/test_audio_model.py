@@ -27,6 +27,13 @@ class FakeModel:
 @unittest.skipIf(watcher is None, "Agent watcher dependencies are not installed")
 class AudioModelManagerTests(unittest.TestCase):
     def setUp(self):
+        # Safety net: anything that escapes the status patch below still
+        # writes into a temporary folder, never the real QCCA data folder.
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        home = patch.object(watcher.config_service.os.path, "expanduser", return_value=temporary.name)
+        home.start()
+        self.addCleanup(home.stop)
         self.published = []
         publisher = patch.object(
             watcher.config_service, "update_audio_model_status",
@@ -64,7 +71,7 @@ class AudioModelManagerTests(unittest.TestCase):
         manager = watcher.AudioModelManager("eager", 600, self.loader)
         manager.start()
         deadline = time.monotonic() + 5
-        while not manager.loaded and time.monotonic() < deadline:
+        while self.published[-1:] != ["ready"] and time.monotonic() < deadline:
             time.sleep(0.01)
         self.assertTrue(manager.loaded)
         self.assertEqual(self.loads, 1)
@@ -136,6 +143,11 @@ class AudioModelManagerTests(unittest.TestCase):
             with self.assertRaises(watcher.AudioModelBusy):
                 manager.transcribe([0.0])
         release.set()
+        # Let the background load finish while the status patch is active.
+        deadline = time.monotonic() + 5
+        while self.published[-1:] != ["ready"] and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.assertTrue(manager.loaded)
 
     def test_heartbeat_republishes_current_status(self):
         manager = watcher.AudioModelManager("lazy", 600, self.loader)
