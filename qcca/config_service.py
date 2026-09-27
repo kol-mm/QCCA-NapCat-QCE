@@ -584,6 +584,19 @@ def ReadMemory(session_id: str) -> list[dict]:
             return []
 
 
+def memory_etag(session_id: str) -> str | None:
+    """Return a cheap validator that changes whenever the session record does.
+
+    Records are append-only, so size plus modification time identifies a
+    version without reading the file.
+    """
+    try:
+        stat = os.stat(_record_file(session_id))
+    except FileNotFoundError:
+        return None
+    return f'"{stat.st_size}-{stat.st_mtime_ns}"'
+
+
 def ReadMemoryTail(session_id: str, limit: int) -> tuple[int, list[dict]]:
     """Return the total entry count and the newest ``limit`` entries.
 

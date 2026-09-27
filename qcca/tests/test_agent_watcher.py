@@ -13,6 +13,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.modules.setdefault("pysilk", types.ModuleType("pysilk"))
 
 try:
+    import numpy as np
+except ImportError:  # pragma: no cover - numpy ships with the speech stack
+    np = None
+
+try:
     import qq_cloud_control_agent as watcher
 except ImportError:  # pragma: no cover - watchdog/requests are optional here
     watcher = None
@@ -137,6 +142,47 @@ class AgentWatcherTests(unittest.TestCase):
             self.assertEqual(watcher.max_parallel_senders(), watcher.DEFAULT_MAX_PARALLEL_SENDERS)
         with patch.dict(watcher.os.environ, {"QCCA_MAX_PARALLEL_SENDERS": "0"}):
             self.assertEqual(watcher.max_parallel_senders(), 1)
+
+    def test_silk_to_pcm_decodes_at_asr_rate_in_memory(self):
+        calls = []
+
+        def fake_decode(source, output, sample_rate):
+            calls.append(sample_rate)
+            output.write(b"\x01\x00\x02\x00")
+
+        with tempfile.NamedTemporaryFile(suffix=".silk", delete=False) as file:
+            file.write(b"#!SILK_V3")
+        self.addCleanup(Path(file.name).unlink)
+        with patch.object(watcher.pysilk, "decode", fake_decode, create=True):
+            self.assertEqual(watcher.silk_to_pcm(file.name), b"\x01\x00\x02\x00")
+        self.assertEqual(calls, [watcher.ASR_SAMPLE_RATE])
+
+        with patch.object(watcher.pysilk, "decode", side_effect=ValueError("bad"), create=True):
+            self.assertIsNone(watcher.silk_to_pcm(file.name))
+
+    def test_amr_to_pcm_reads_ffmpeg_stdout(self):
+        completed = watcher.subprocess.CompletedProcess([], 0, stdout=b"\x00\x01", stderr=b"")
+        with patch.object(watcher.shutil, "which", return_value="ffmpeg"), \
+                patch.object(watcher.subprocess, "run", return_value=completed) as run:
+            self.assertEqual(watcher.amr_to_pcm("voice.amr"), b"\x00\x01")
+        command = run.call_args.args[0]
+        self.assertEqual(command[-1], "pipe:1")
+        self.assertIn(str(watcher.ASR_SAMPLE_RATE), command)
+
+        failed = watcher.subprocess.CompletedProcess([], 1, stdout=b"", stderr="错误".encode())
+        with patch.object(watcher.shutil, "which", return_value="ffmpeg"), \
+                patch.object(watcher.subprocess, "run", return_value=failed):
+            self.assertIsNone(watcher.amr_to_pcm("voice.amr"))
+        with patch.object(watcher.shutil, "which", return_value=None):
+            self.assertIsNone(watcher.amr_to_pcm("voice.amr"))
+
+    @unittest.skipIf(np is None, "numpy is not installed")
+    def test_pcm_to_waveform_scales_and_drops_odd_byte(self):
+        pcm = b"".join(value.to_bytes(2, "little", signed=True)
+                       for value in (0, 16384, -32768, 32767)) + b"\x7f"
+        waveform = watcher.pcm_to_waveform(pcm)
+        self.assertEqual(waveform.dtype, np.float32)
+        self.assertEqual(waveform.tolist(), [0.0, 0.5, -1.0, 32767 / 32768])
 
 
 if __name__ == "__main__":

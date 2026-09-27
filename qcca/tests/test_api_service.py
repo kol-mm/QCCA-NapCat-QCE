@@ -42,6 +42,24 @@ class ApiServiceTests(unittest.TestCase):
         self.assertEqual(body["records"][0]["content"], "5")
         self.assertEqual(self.client.get("/qcca/records/bad..%5Cid").status_code, 400)
 
+    def test_records_endpoint_revalidates_with_etag(self):
+        config_service.MemoryLine("user", "hello", "session-b")
+        first = self.client.get("/qcca/records/session-b")
+        etag = first.headers["etag"]
+
+        unchanged = self.client.get("/qcca/records/session-b", headers={"If-None-Match": etag})
+        self.assertEqual(unchanged.status_code, 304)
+        self.assertEqual(unchanged.content, b"")
+
+        config_service.MemoryLine("assistant", "world", "session-b")
+        changed = self.client.get("/qcca/records/session-b", headers={"If-None-Match": etag})
+        self.assertEqual(changed.status_code, 200)
+        self.assertEqual(changed.json()["total"], 2)
+        self.assertNotEqual(changed.headers["etag"], etag)
+
+        missing = self.client.get("/qcca/records/none", headers={"If-None-Match": etag})
+        self.assertEqual(missing.json(), {"session_id": "none", "total": 0, "records": []})
+
     def test_system_status_queries_login_once(self):
         with patch.object(api_service, "_get_current_login_qq", return_value=None) as login, \
                 patch.object(api_service, "_port_is_open", return_value=False):

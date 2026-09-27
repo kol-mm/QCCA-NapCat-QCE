@@ -36,10 +36,11 @@ jobs:
         with:
           python-version-file: qcca/python-version.txt
       - name: Install test dependencies
-        # The speech stack (torch, FunASR, pysilk) is not needed by the tests.
+        # torch, FunASR and pysilk are not needed by the tests; numpy is
+        # pinned as in requirements.txt for the audio conversion test.
         run: >
           python -m pip install --disable-pip-version-check
           -r qcca/api-requirements.txt
-          watchdog==6.0.0 requests==2.32.3 httpx==0.28.1
+          watchdog==6.0.0 requests==2.32.3 httpx==0.28.1 numpy==1.26.4
       - name: Run unit tests
         run: python -m unittest discover -s qcca/tests -t . -v

@@ -12,9 +12,9 @@ from typing import Any, Dict
 from urllib.error import URLError
 from urllib.request import urlopen
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -46,7 +46,8 @@ app.add_middleware(
     ],
     allow_credentials=False,
     allow_methods=["GET", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=["Content-Type"],
+    allow_headers=["Content-Type", "If-None-Match"],
+    expose_headers=["ETag"],
 )
 
 _qcca_static_dir = Path(__file__).resolve().parents[1] / "static" / "qce" / "qcca"
@@ -87,17 +88,27 @@ def get_agent_status():
 
 
 @app.get("/qcca/records/{session_id}")
-def get_session_records(session_id: str):
-    """Return the JSONL chat records associated with one session UUID."""
+def get_session_records(session_id: str, request: Request):
+    """Return the JSONL chat records associated with one session UUID.
+
+    The management page re-polls this every few seconds; an unchanged record
+    answers ``304 Not Modified`` without reading the file.
+    """
     try:
+        etag = config_service.memory_etag(session_id)
+        if etag and request.headers.get("if-none-match") == etag:
+            return Response(status_code=304, headers={"ETag": etag})
         total, records = config_service.ReadMemoryTail(session_id, MAX_RECORDS_RESPONSE)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return {
+    headers = {"Cache-Control": "no-cache"}
+    if etag:
+        headers["ETag"] = etag
+    return JSONResponse({
         'session_id': session_id,
         'total': total,
         'records': records,
-    }
+    }, headers=headers)
 
 
 class Workspace(BaseModel):

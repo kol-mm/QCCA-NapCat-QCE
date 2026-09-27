@@ -8,7 +8,7 @@
   if (!/^\d{1,5}$/.test(apiPort) || Number(apiPort) < 1 || Number(apiPort) > 65535) apiPort = '40655';
   try { window.localStorage.setItem('qccaApiPort', apiPort); } catch (error) {}
   var API_BASE = 'http://' + (location.hostname === 'localhost' ? 'localhost' : '127.0.0.1') + ':' + apiPort;
-  var state = { configs: {}, selectedUid: null, draft: null, dirty: false, smtpConfigured: false, smtpSenderQq: '', smtpAccounts: [], smtpLoginQq: '', smtpError: '', audioModel: { status: 'unknown', message: '' }, agentStatus: { status: 'unknown', message: '' }, systemHealth: null, setup: { setup_completed: true, default_agent: 'codex', login_qq: '', agents: [] }, wizardStep: 1, setupPrompted: false, chatRecords: null, chatRecordsSessionId: null, chatRecordsLoading: false };
+  var state = { configs: {}, selectedUid: null, draft: null, dirty: false, smtpConfigured: false, smtpSenderQq: '', smtpAccounts: [], smtpLoginQq: '', smtpError: '', audioModel: { status: 'unknown', message: '' }, agentStatus: { status: 'unknown', message: '' }, systemHealth: null, setup: { setup_completed: true, default_agent: 'codex', login_qq: '', agents: [] }, wizardStep: 1, setupPrompted: false, chatRecords: null, chatRecordsSessionId: null, chatRecordsLoading: false, chatRecordsEtag: null };
 
   var icons = {
     'arrow-left': '<path d="m12 19-7-7 7-7"/><path d="M19 12H5"/>',
@@ -45,11 +45,15 @@
     }, 0);
   }
 
+  // options.meta, when given, receives the response status and ETag; a
+  // 304 Not Modified response resolves to null instead of throwing.
   async function request(path, options) {
     var response;
     var controller = new AbortController();
     var timeout = window.setTimeout(function () { controller.abort(); }, 10000);
+    var meta = options && options.meta;
     var requestOptions = Object.assign({}, options || {}, { signal: controller.signal });
+    delete requestOptions.meta;
     try {
       response = await fetch(API_BASE + path, requestOptions);
     } catch (error) {
@@ -59,6 +63,11 @@
     } finally {
       window.clearTimeout(timeout);
     }
+    if (meta) {
+      meta.status = response.status;
+      meta.etag = response.headers.get('ETag');
+    }
+    if (response.status === 304) return null;
     var payload = null;
     try { payload = await response.json(); } catch (error) {}
     if (!response.ok) throw new Error(payload && payload.detail ? payload.detail : '请求失败（' + response.status + '）');
@@ -450,21 +459,36 @@
     }
     if (!force && state.chatRecordsSessionId === selected.id && Array.isArray(state.chatRecords)) return;
     var sessionId = selected.id;
-    state.chatRecordsSessionId = sessionId;
-    state.chatRecordsLoading = true;
-    renderChatRecords();
+    // A background refresh keeps the current list on screen (no loading
+    // placeholder, no lost scroll position) and redraws only on change.
+    var refreshing = state.chatRecordsSessionId === sessionId && Array.isArray(state.chatRecords) && !state.chatRecordsLoading;
+    if (!refreshing) {
+      state.chatRecordsEtag = null;
+      state.chatRecordsSessionId = sessionId;
+      state.chatRecordsLoading = true;
+      renderChatRecords();
+    }
+    var meta = {};
+    var headers = refreshing && state.chatRecordsEtag ? { 'If-None-Match': state.chatRecordsEtag } : {};
+    var changed = !refreshing;
     try {
-      var result = await request('/qcca/records/' + encodeURIComponent(sessionId));
+      var result = await request('/qcca/records/' + encodeURIComponent(sessionId), { headers: headers, cache: 'no-store', meta: meta });
       var current = selectedSession();
-      if (current && current.id === sessionId) state.chatRecords = Array.isArray(result.records) ? result.records : [];
+      if (result && current && current.id === sessionId && state.chatRecordsSessionId === sessionId) {
+        state.chatRecords = Array.isArray(result.records) ? result.records : [];
+        state.chatRecordsEtag = meta.etag || null;
+        changed = true;
+      }
     } catch (error) {
-      if (state.chatRecordsSessionId === sessionId) {
+      // A failed background refresh keeps the list; the status bar already
+      // reports an unreachable API, so avoid a toast every few seconds.
+      if (!refreshing && state.chatRecordsSessionId === sessionId) {
         state.chatRecords = [];
         toast(error.message, 'error');
       }
     } finally {
-      if (state.chatRecordsSessionId === sessionId) state.chatRecordsLoading = false;
-      renderChatRecords();
+      if (!refreshing && state.chatRecordsSessionId === sessionId) state.chatRecordsLoading = false;
+      if (changed) renderChatRecords();
     }
   }
 

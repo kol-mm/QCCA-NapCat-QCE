@@ -12,7 +12,6 @@ import shutil
 import subprocess
 import re
 import pysilk
-import wave
 import os
 
 import config_service
@@ -200,56 +199,67 @@ def check_login_api() -> bool:
     return True
 
 
-def silk_to_wav(silk_path: str, wav_path: str) -> bool:
+# paraformer-zh expects 16 kHz mono input.
+ASR_SAMPLE_RATE = 16000
+
+
+def silk_to_pcm(silk_path: str) -> bytes | None:
+    """Decode a QQ Silk voice file to 16 kHz mono 16-bit PCM in memory."""
     try:
         with open(silk_path, "rb") as source:
             # pysilk 需要文件对象，不能直接传入字节数组。
             output = io.BytesIO()
-            pysilk.decode(source, output, 24000)
-        with wave.open(wav_path, "wb") as wf:
-            wf.setnchannels(1)
-            wf.setsampwidth(2)
-            wf.setframerate(24000)
-            wf.writeframes(output.getvalue())
-        return True
+            pysilk.decode(source, output, ASR_SAMPLE_RATE)
     except Exception as e:
         print(f"pysilk解码异常：{e}")
-        return False
+        return None
+    return output.getvalue() or None
 
 
-def amr_to_16k_wav(amr_path: str, wav_path: str) -> bool:
-    """Silk 解码失败时，回退到 ffmpeg 的 AMR 转码。"""
+def amr_to_pcm(amr_path: str) -> bytes | None:
+    """Silk 解码失败时，回退到 ffmpeg 的 AMR 转码，直接输出 16 kHz PCM。"""
     ffmpeg = shutil.which("ffmpeg")
     if not ffmpeg:
         print("ffmpeg 不在 PATH 中，无法执行 AMR 回退转码")
-        return False
+        return None
     try:
         result = subprocess.run(
             [
                 ffmpeg,
                 "-hide_banner",
                 "-loglevel", "error",
-                "-y",
                 "-i", amr_path,
+                "-f", "s16le",
                 "-acodec", "pcm_s16le",
-                "-ar", "16000",
+                "-ar", str(ASR_SAMPLE_RATE),
                 "-ac", "1",
-                wav_path,
+                "pipe:1",
             ],
+            stdin=subprocess.DEVNULL,
             capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
             timeout=30,
             check=False,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         print(f"AMR 回退转码启动失败：{exc}")
-        return False
+        return None
     if result.returncode != 0:
-        print(f"AMR 回退转码失败：{result.stderr.strip()}")
-        return False
-    return os.path.isfile(wav_path) and os.path.getsize(wav_path) > 44
+        stderr = result.stderr.decode("utf-8", errors="replace").strip()
+        print(f"AMR 回退转码失败：{stderr}")
+        return None
+    return result.stdout or None
+
+
+def pcm_to_waveform(pcm: bytes):
+    """Convert 16-bit PCM to the float32 [-1, 1) samples FunASR accepts.
+
+    Passing samples directly skips writing a temporary WAV next to the QQ
+    media file and FunASR's reload/resample of it.
+    """
+    import numpy as np
+
+    usable = len(pcm) - len(pcm) % 2
+    return np.frombuffer(pcm[:usable], dtype="<i2").astype(np.float32) / 32768.0
 
 
 audio_model = None
@@ -450,17 +460,17 @@ class myFileSystemEventHandler(FileSystemEventHandler):
                         if not audio_model_ready.wait(timeout=120):
                             send_email(receive_uid, send_uid, '语音识别模型仍在加载，请稍后重发。')
                             return
-                        wav_path = os.path.splitext(audio_path)[0] + '.wav'
                         try:
-                            decoded = silk_to_wav(audio_path, wav_path)
-                            if not decoded:
+                            pcm = silk_to_pcm(audio_path)
+                            if not pcm:
                                 print('Silk 解码失败，尝试 AMR 回退转码')
-                                decoded = amr_to_16k_wav(audio_path, wav_path)
-                            if not decoded:
+                                pcm = amr_to_pcm(audio_path)
+                            if not pcm:
                                 send_email(receive_uid, send_uid, '语音解码失败，暂时无法识别该语音。')
                                 return
+                            waveform = pcm_to_waveform(pcm)
                             with _audio_model_lock:
-                                text_list = audio_model.generate(input=wav_path)
+                                text_list = audio_model.generate(input=waveform)
                             text = text_list[0].get('text') if text_list and isinstance(text_list[0], dict) else ''
                             data_list.append(text or '未识别到内容')
                             print(f'识别内容为:{text}')
@@ -468,12 +478,6 @@ class myFileSystemEventHandler(FileSystemEventHandler):
                             print(f'文件{path}语音识别失败:{e}')
                             send_email(receive_uid, send_uid, '语音识别失败，请稍后重试。')
                             return
-                        finally:
-                            try:
-                                if os.path.exists(wav_path):
-                                    os.remove(wav_path)
-                            except OSError as e:
-                                print(f'清理临时语音文件失败: {e}')
                 combined_text = ''.join(data_list)
                 command = combined_text.strip().lower()
                 if command == '/help':
