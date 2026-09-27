@@ -10,8 +10,13 @@
   if (window.__qceSearchEnhancer) return;
   window.__qceSearchEnhancer = true;
 
+  // The injected QCCA link; QCE may re-render its sidebar and drop it.
+  var navigationEntry = null;
+
   function injectQccaNavigation() {
-    if (document.querySelector('[data-qcca-navigation]')) return;
+    if (navigationEntry && navigationEntry.isConnected) return;
+    navigationEntry = document.querySelector('[data-qcca-navigation]');
+    if (navigationEntry) return;
 
     var candidates = document.querySelectorAll('a, button');
     var settingsEntry = null;
@@ -43,6 +48,7 @@
     }
 
     settingsEntry.parentElement.insertBefore(entry, settingsEntry);
+    navigationEntry = entry;
   }
 
   /**
@@ -97,8 +103,12 @@
     }
     updateDarkMode();
 
-    // 监听深色模式变化
+    // 监听深色模式变化；搜索框随对话框关闭后断开，避免每次打开都遗留一个监听器
     var observer = new MutationObserver(function () {
+      if (!searchInput.isConnected) {
+        observer.disconnect();
+        return;
+      }
       updateDarkMode();
     });
     observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
@@ -180,60 +190,73 @@
   }
 
   /**
-   * 检查 dialog 是否为会话选择列表
+   * 按对话框类型返回搜索框占位文字，不需要搜索时返回 null。
+   * 优先级：会话选择 > 导出会话 > IP 名单。只读取一次 textContent，
+   * 大型会话列表的文本可能很长。
    */
-  function isSessionListDialog(dialog) {
+  function dialogPlaceholder(dialog) {
     var text = dialog.textContent || '';
-    // 包含"实时捕获"或"选择要捕获的会话"等关键词
-    return text.indexOf('捕获') !== -1 || text.indexOf('会话') !== -1;
+    if (text.indexOf('捕获') !== -1 || text.indexOf('会话') !== -1) return '搜索会话名称或 QQ 号…';
+    if (text.indexOf('导出') !== -1) return '搜索要导出的会话…';
+    if (text.indexOf('IP') !== -1 || text.indexOf('名单') !== -1 || text.indexOf('地址') !== -1) return '搜索 IP 地址…';
+    return null;
   }
 
   /**
-   * 检查 dialog 是否为导出会话选择
+   * 为对话框注入搜索框（如需要）。先做廉价的结构检查，只有确实需要注入时才读取文本。
    */
-  function isExportDialog(dialog) {
-    var text = dialog.textContent || '';
-    return text.indexOf('导出') !== -1;
+  function processDialog(dialog) {
+    if (!dialog.isConnected) return;
+    var scrollContainer = findScrollContainer(dialog);
+    if (!scrollContainer) return;
+    var previous = scrollContainer.previousElementSibling;
+    if (previous && previous.dataset && previous.dataset.qceSearch) return;
+    var placeholder = dialogPlaceholder(dialog);
+    if (placeholder) injectSearchBox(scrollContainer, placeholder);
   }
 
-  /**
-   * 检查 dialog 是否为 IP 名单编辑
-   */
-  function isIpListDialog(dialog) {
-    var text = dialog.textContent || '';
-    return text.indexOf('IP') !== -1 || text.indexOf('名单') !== -1 || text.indexOf('地址') !== -1;
+  // DOM 变化可能非常频繁（例如列表逐批加载数千项）。把待处理的对话框合并到
+  // 下一帧统一处理，每个对话框每帧最多检查一次。
+  var pendingDialogs = new Set();
+  var dialogFrame = 0;
+
+  function queueDialog(dialog) {
+    pendingDialogs.add(dialog);
+    if (!dialogFrame) dialogFrame = window.requestAnimationFrame(flushDialogs);
+  }
+
+  function flushDialogs() {
+    dialogFrame = 0;
+    var dialogs = Array.from(pendingDialogs);
+    pendingDialogs.clear();
+    for (var i = 0; i < dialogs.length; i++) processDialog(dialogs[i]);
+  }
+
+  // 找不到“设置”入口时需要扫描页面上所有链接和按钮；限制扫描频率，
+  // 并保证最后一次 DOM 变化之后仍会检查一次。
+  var navigationTimer = 0;
+
+  function queueNavigationCheck() {
+    if (navigationTimer || (navigationEntry && navigationEntry.isConnected)) return;
+    navigationTimer = window.setTimeout(function () {
+      navigationTimer = 0;
+      injectQccaNavigation();
+    }, 150);
   }
 
   /**
    * 处理新出现的 dialog
    */
   function handleDialog(dialog) {
-    // 等待 DOM 渲染完成
+    queueDialog(dialog);
+    // 等待 DOM 渲染完成后再检查一次
     setTimeout(function () {
-      var placeholder = '搜索…';
-      var matched = false;
-      if (isSessionListDialog(dialog)) {
-        placeholder = '搜索会话名称或 QQ 号…';
-        matched = true;
-      } else if (isExportDialog(dialog)) {
-        placeholder = '搜索要导出的会话…';
-        matched = true;
-      } else if (isIpListDialog(dialog)) {
-        placeholder = '搜索 IP 地址…';
-        matched = true;
-      }
-      if (matched) {
-        var scrollContainer = findScrollContainer(dialog);
-        if (scrollContainer) {
-          injectSearchBox(scrollContainer, placeholder);
-        }
-      }
+      queueDialog(dialog);
     }, 200);
   }
 
   // 使用 MutationObserver 监听 DOM 变化
   var bodyObserver = new MutationObserver(function (mutations) {
-    injectQccaNavigation();
     for (var i = 0; i < mutations.length; i++) {
       var mutation = mutations[i];
       for (var j = 0; j < mutation.addedNodes.length; j++) {
@@ -265,21 +288,15 @@
 
   // 额外: 监听 dialog 内部的 DOM 变化（处理异步加载列表的情况）
   var dialogContentObserver = new MutationObserver(function (mutations) {
-    injectQccaNavigation();
+    queueNavigationCheck();
+    var lastTarget = null;
     for (var i = 0; i < mutations.length; i++) {
       var mutation = mutations[i];
-      if (mutation.addedNodes.length > 0) {
-        var dialog = mutation.target.closest('[role=dialog]');
-        if (dialog && (isSessionListDialog(dialog) || isExportDialog(dialog) || isIpListDialog(dialog))) {
-          var scrollContainer = findScrollContainer(dialog);
-          if (scrollContainer && !scrollContainer.previousElementSibling?.dataset?.qceSearch) {
-            var ph = '搜索…';
-            if (isSessionListDialog(dialog)) ph = '搜索会话名称或 QQ 号…';
-            else if (isExportDialog(dialog)) ph = '搜索要导出的会话…';
-            else if (isIpListDialog(dialog)) ph = '搜索 IP 地址…';
-            injectSearchBox(scrollContainer, ph);
-          }
-        }
+      // 同一批次中连续追加到同一容器的记录只需查找一次所属对话框
+      if (mutation.addedNodes.length > 0 && mutation.target !== lastTarget) {
+        lastTarget = mutation.target;
+        var dialog = mutation.target.closest ? mutation.target.closest('[role=dialog]') : null;
+        if (dialog) queueDialog(dialog);
       }
     }
   });
