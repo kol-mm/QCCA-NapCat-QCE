@@ -323,6 +323,8 @@ class AudioModelManager:
         self._model = None
         self._last_used = time.monotonic()
         self._status = ('not_started', '')
+        # Keeps the heartbeat from re-publishing a status that was just replaced.
+        self._status_lock = threading.Lock()
 
     @property
     def loaded(self) -> bool:
@@ -393,12 +395,18 @@ class AudioModelManager:
             self._lock.release()
 
     def heartbeat(self) -> None:
-        status, message = self._status
-        if status != 'not_started':
-            self._publish(status, message)
+        with self._status_lock:
+            status, message = self._status
+            if status != 'not_started':
+                self._write_status(status, message)
 
     def _publish(self, status: str, message: str) -> None:
-        self._status = (status, message)
+        with self._status_lock:
+            self._status = (status, message)
+            self._write_status(status, message)
+
+    @staticmethod
+    def _write_status(status: str, message: str) -> None:
         try:
             config_service.update_audio_model_status(status, message)
         except OSError as e:

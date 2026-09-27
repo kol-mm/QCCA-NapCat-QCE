@@ -93,7 +93,10 @@ def stream_agent_cli(display_name: str, command: list[str], on_line: Callable[[s
     finally:
         timer.cancel()
         stderr_thread.join(timeout=5)
-        process.stderr.close()
+        # A leftover child process can keep stderr open; closing it under the
+        # reader thread would only log an "I/O on closed file" traceback.
+        if not stderr_thread.is_alive():
+            process.stderr.close()
 
     if timed_out.is_set():
         raise TimeoutError(f"{display_name} 执行超时，超过 {AGENT_TIMEOUT_SECONDS} 秒")
