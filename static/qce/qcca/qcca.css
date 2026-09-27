@@ -162,7 +162,7 @@ button { color: inherit; }
 .audio-model-settings h2 { margin: 0; font-size: 15px; }
 .audio-model-settings p { margin: 5px 0 0; color: var(--muted); font-size: 12px; }
 .model-status { flex: 0 0 auto; padding: 4px 8px; color: var(--muted); background: var(--surface-alt); border: 1px solid var(--border); border-radius: 999px; font-size: 12px; white-space: nowrap; }
-.model-status.ready { color: var(--green); }
+.model-status.ready, .model-status.standby { color: var(--green); }
 .model-status.loading { color: var(--blue); }
 .model-status.failed, .model-status.stopped { color: var(--red); }
 .agent-monitor, .chat-records { margin-bottom: 28px; padding: 20px 22px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; }

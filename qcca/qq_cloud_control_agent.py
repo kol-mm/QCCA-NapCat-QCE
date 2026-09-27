@@ -1,3 +1,5 @@
+import gc
+import sys
 import time
 from collections import deque
 from contextlib import suppress
@@ -262,27 +264,148 @@ def pcm_to_waveform(pcm: bytes):
     return np.frombuffer(pcm[:usable], dtype="<i2").astype(np.float32) / 32768.0
 
 
-audio_model = None
-audio_model_ready = threading.Event()
-# Messages from different senders run in parallel; FunASR inference is not
-# documented as thread-safe, so transcriptions take turns.
-_audio_model_lock = threading.Lock()
+AUDIO_MODEL_MODES = {'eager', 'lazy', 'off'}
+DEFAULT_AUDIO_MODEL_MODE = 'eager'
+DEFAULT_AUDIO_IDLE_MINUTES = 10
+# How long a voice message waits for another load or transcription to finish.
+AUDIO_MODEL_WAIT_SECONDS = 120
 
 
-def load_audio_model() -> None:
-    """后台加载大模型，避免文本命令被模型初始化阻塞。"""
-    global audio_model
-    config_service.update_audio_model_status('loading', '正在加载语音识别模型')
+def audio_model_mode() -> str:
+    """QCCA_AUDIO_MODEL: eager (load at startup), lazy (on first voice) or off."""
+    mode = os.getenv('QCCA_AUDIO_MODEL', DEFAULT_AUDIO_MODEL_MODE).strip().lower()
+    return mode if mode in AUDIO_MODEL_MODES else DEFAULT_AUDIO_MODEL_MODE
+
+
+def audio_idle_seconds() -> float:
+    """QCCA_AUDIO_IDLE_MINUTES: release the model after this idle time; 0 keeps it."""
     try:
-        from funasr import AutoModel
-        audio_model = AutoModel(model="paraformer-zh", disable_update=True)
-    except Exception as exc:
-        config_service.update_audio_model_status('failed', f'模型加载失败：{exc}')
-        print(f'模型加载失败：{exc}', flush=True)
-        return
-    audio_model_ready.set()
-    config_service.update_audio_model_status('ready', '语音识别模型已就绪')
-    print('模型加载成功', flush=True)
+        minutes = float(os.getenv('QCCA_AUDIO_IDLE_MINUTES', DEFAULT_AUDIO_IDLE_MINUTES))
+    except ValueError:
+        minutes = DEFAULT_AUDIO_IDLE_MINUTES
+    return max(0.0, minutes * 60)
+
+
+class AudioModelDisabled(RuntimeError):
+    """Voice recognition is switched off with QCCA_AUDIO_MODEL=off."""
+
+
+class AudioModelBusy(RuntimeError):
+    """The model is still loading (or busy) after the wait limit."""
+
+
+def load_funasr_model():
+    # Imported here so torch and FunASR are never loaded when voice is off.
+    from funasr import AutoModel
+    return AutoModel(model="paraformer-zh", disable_update=True)
+
+
+def release_torch_cache() -> None:
+    torch = sys.modules.get('torch')
+    if torch is not None and torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+
+class AudioModelManager:
+    """Own the FunASR model: load it when needed and release it when idle.
+
+    The speech model is the largest memory user in QCCA (roughly a gigabyte
+    with its weights), yet many setups only receive text. Loading, inference
+    and release take turns under one lock; FunASR inference is not documented
+    as thread-safe, and senders' messages run in parallel.
+    """
+
+    def __init__(self, mode: str, idle_seconds: float, loader=load_funasr_model):
+        self.mode = mode
+        self.idle_seconds = idle_seconds
+        self._loader = loader
+        self._lock = threading.Lock()
+        self._model = None
+        self._last_used = time.monotonic()
+        self._status = ('not_started', '')
+
+    @property
+    def loaded(self) -> bool:
+        return self._model is not None
+
+    def start(self) -> None:
+        if self.mode == 'off':
+            self._publish('disabled', '语音识别已按设置关闭（QCCA_AUDIO_MODEL=off）')
+        elif self.mode == 'lazy':
+            self._publish('standby', '收到语音消息时加载语音识别模型')
+        else:
+            # 后台加载，避免文本命令被模型初始化阻塞。
+            threading.Thread(target=self._preload, name='qcca-audio-model', daemon=True).start()
+
+    def _preload(self) -> None:
+        with self._lock:
+            try:
+                self._ensure_loaded()
+            except Exception:
+                pass  # Already reported; the next voice message retries.
+
+    def _ensure_loaded(self):
+        """Return the model, loading it first if needed; the caller holds the lock."""
+        if self._model is None:
+            self._publish('loading', '正在加载语音识别模型')
+            try:
+                self._model = self._loader()
+            except Exception as exc:
+                self._publish('failed', f'模型加载失败：{exc}')
+                print(f'模型加载失败：{exc}', flush=True)
+                raise
+            self._last_used = time.monotonic()
+            self._publish('ready', '语音识别模型已就绪')
+            print('模型加载成功', flush=True)
+        return self._model
+
+    def transcribe(self, waveform):
+        if self.mode == 'off':
+            raise AudioModelDisabled('语音识别已关闭')
+        if not self._lock.acquire(timeout=AUDIO_MODEL_WAIT_SECONDS):
+            raise AudioModelBusy('语音识别模型仍在加载')
+        try:
+            model = self._ensure_loaded()
+            result = model.generate(input=waveform)
+            self._last_used = time.monotonic()
+            return result
+        finally:
+            self._lock.release()
+
+    def release_if_idle(self) -> bool:
+        """Free the model after the idle limit; a later voice message reloads it."""
+        if not self.idle_seconds or self._model is None:
+            return False
+        if time.monotonic() - self._last_used < self.idle_seconds:
+            return False
+        if not self._lock.acquire(blocking=False):
+            return False  # Loading or transcribing right now.
+        try:
+            if self._model is None or time.monotonic() - self._last_used < self.idle_seconds:
+                return False
+            self._model = None
+            gc.collect()
+            release_torch_cache()
+            self._publish('standby', '空闲时已释放语音识别模型，收到语音消息时自动重新加载')
+            print('语音识别模型空闲，已释放内存', flush=True)
+            return True
+        finally:
+            self._lock.release()
+
+    def heartbeat(self) -> None:
+        status, message = self._status
+        if status != 'not_started':
+            self._publish(status, message)
+
+    def _publish(self, status: str, message: str) -> None:
+        self._status = (status, message)
+        try:
+            config_service.update_audio_model_status(status, message)
+        except OSError as e:
+            print(f'写入语音模型状态失败: {e}')
+
+
+audio_models = AudioModelManager(audio_model_mode(), audio_idle_seconds())
 
 
 def wait_for_stable_size(path: str, attempts: int, require_content: bool) -> bool:
@@ -457,8 +580,8 @@ class myFileSystemEventHandler(FileSystemEventHandler):
                         if not isinstance(audio_path, str) or not wait_for_audio_file(audio_path):
                             send_email(receive_uid, send_uid, '语音文件尚未准备完成，请稍后重发。')
                             return
-                        if not audio_model_ready.wait(timeout=120):
-                            send_email(receive_uid, send_uid, '语音识别模型仍在加载，请稍后重发。')
+                        if audio_models.mode == 'off':
+                            send_email(receive_uid, send_uid, '语音识别已关闭，请发送文字消息。')
                             return
                         try:
                             pcm = silk_to_pcm(audio_path)
@@ -469,11 +592,13 @@ class myFileSystemEventHandler(FileSystemEventHandler):
                                 send_email(receive_uid, send_uid, '语音解码失败，暂时无法识别该语音。')
                                 return
                             waveform = pcm_to_waveform(pcm)
-                            with _audio_model_lock:
-                                text_list = audio_model.generate(input=waveform)
+                            text_list = audio_models.transcribe(waveform)
                             text = text_list[0].get('text') if text_list and isinstance(text_list[0], dict) else ''
                             data_list.append(text or '未识别到内容')
                             print(f'识别内容为:{text}')
+                        except AudioModelBusy:
+                            send_email(receive_uid, send_uid, '语音识别模型仍在加载，请稍后重发。')
+                            return
                         except Exception as e:
                             print(f'文件{path}语音识别失败:{e}')
                             send_email(receive_uid, send_uid, '语音识别失败，请稍后重试。')
@@ -670,7 +795,9 @@ if __name__ == '__main__':
     print('程序开始', flush=True)
     check_login_api()
     publish_agent_status('idle', message='Agent 已启动')
-    threading.Thread(target=load_audio_model, name='qcca-audio-model', daemon=True).start()
+    print(f'语音识别模式：{audio_models.mode}，空闲释放：'
+          f'{audio_models.idle_seconds / 60:g} 分钟', flush=True)
+    audio_models.start()
     # 创建记录目录；config_dir_file() 同时创建工作目录和空配置文件。
     os.makedirs(os.path.join(config_service.qcca_home(), 'record'), exist_ok=True)
     config_service.config_dir_file()
@@ -695,8 +822,9 @@ if __name__ == '__main__':
         while True:
             time.sleep(1)
             now = time.monotonic()
-            if audio_model_ready.is_set() and now - audio_heartbeat_at >= 5:
-                config_service.update_audio_model_status('ready', '语音识别模型已就绪')
+            if now - audio_heartbeat_at >= 5:
+                audio_models.release_if_idle()
+                audio_models.heartbeat()
                 audio_heartbeat_at = now
             if now - agent_heartbeat_at >= 5:
                 heartbeat_agent_status()

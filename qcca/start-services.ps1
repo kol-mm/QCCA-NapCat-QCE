@@ -361,6 +361,11 @@ Write-Diagnostic $startupLog "[Self-check] QCCA API is healthy: $healthUrl"
 
 $agentModules = @("watchdog", "funasr", "pysilk", "torch", "torchaudio", "requests")
 $agentHeavyModules = @("funasr", "torch", "torchaudio")
+# With voice recognition switched off the Agent never loads the speech stack.
+if ("$env:QCCA_AUDIO_MODEL".Trim().ToLowerInvariant() -eq "off") {
+    $agentModules = @($agentModules | Where-Object { $_ -notin $agentHeavyModules })
+    $agentHeavyModules = @()
+}
 if (-not (Test-PythonImports $agentModules $agentErr $agentHeavyModules)) {
     if (-not (Install-Requirements (Join-Path $QccaDirectory "requirements.txt") $agentErr "Agent")) {
         Write-Diagnostic $agentErr "[Agent] Agent dependencies failed to install; Agent was not started."

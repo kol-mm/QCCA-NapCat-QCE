@@ -81,6 +81,17 @@ class ApiServiceTests(unittest.TestCase):
 
         self.assertEqual(login.call_count, calls_after_write + 1)
 
+    def test_audio_standby_and_disabled_are_not_warnings(self):
+        for status, summary in (("standby", "按需加载"), ("disabled", "已按设置关闭")):
+            api_service._invalidate_status_cache()
+            with patch.object(api_service, "_get_current_login_qq", return_value=None), \
+                    patch.object(api_service, "_port_is_open", return_value=False), \
+                    patch.object(config_service, "get_audio_model_status",
+                                 return_value={"status": status, "message": ""}):
+                services = self.client.get("/qcca/system-status").json()["services"]
+            audio = next(item for item in services if item["id"] == "audio")
+            self.assertEqual((audio["status"], audio["summary"]), ("ready", summary))
+
     def test_config_update_round_trip_keeps_session_ids(self):
         config_path = config_service.config_dir_file()
         users = {"100": config_service.get_dict_user("ws", "chat")}

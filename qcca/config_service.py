@@ -341,7 +341,7 @@ def update_audio_model_status(status: str, message: str = "") -> None:
 
 
 def get_audio_model_status() -> dict:
-    """读取 Agent 状态；就绪状态超过 15 秒未心跳则视为已停止。"""
+    """读取 Agent 状态；Agent 运行时每 5 秒刷新，超过 15 秒未心跳则视为已停止。"""
     try:
         with open(audio_model_status_file(), "r", encoding="utf-8") as file:
             data = json.load(file)
@@ -354,7 +354,8 @@ def get_audio_model_status() -> dict:
     updated_at = data.get("updated_at")
     if not isinstance(status, str) or not isinstance(updated_at, (int, float)):
         return {"status": "unknown", "message": "音频模型状态格式无效"}
-    if status in {"loading", "ready"} and time.time() - updated_at > HEARTBEAT_TIMEOUT_SECONDS:
+    if (status in {"loading", "ready", "standby", "disabled"}
+            and time.time() - updated_at > HEARTBEAT_TIMEOUT_SECONDS):
         return {"status": "stopped", "message": "Agent 心跳已停止"}
     return {
         "status": status,

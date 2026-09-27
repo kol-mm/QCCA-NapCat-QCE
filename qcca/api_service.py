@@ -318,8 +318,12 @@ def _system_status() -> dict:
     audio_value = audio_status.get("status", "unknown")
     if audio_value == "ready":
         services.append(_service("audio", "语音识别", "ready", "音频模型已加载", required=False))
+    elif audio_value == "standby":
+        services.append(_service("audio", "语音识别", "ready", "按需加载", "收到语音消息时自动加载模型，空闲时释放内存", required=False))
+    elif audio_value == "disabled":
+        services.append(_service("audio", "语音识别", "ready", "已按设置关闭", "设置 QCCA_AUDIO_MODEL=eager 或 lazy 后重启以启用", required=False))
     elif audio_value == "loading":
-        services.append(_service("audio", "语音识别", "waiting", "首次加载音频模型", "文字消息不受影响", required=False))
+        services.append(_service("audio", "语音识别", "waiting", "正在加载音频模型", "文字消息不受影响", required=False))
     elif audio_value in {"failed", "stopped"}:
         services.append(_service("audio", "语音识别", "warning", "语音识别当前不可用", audio_status.get("message", "请查看 Agent 日志"), required=False))
     else:

@@ -154,6 +154,21 @@ class ConfigServiceTests(unittest.TestCase):
         self.assertEqual(user["workspaces"]["ws"]["sessions"]["chat"]["agent"], "claude")
         self.assertTrue(user["workspaces"]["ws"]["sessions"]["chat"]["id"])
 
+    def test_audio_status_goes_stale_without_heartbeat(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            with patch.object(config_service.os.path, "expanduser", return_value=temporary):
+                config_service.update_audio_model_status("standby", "on demand")
+                self.assertEqual(config_service.get_audio_model_status()["status"], "standby")
+                with patch.object(config_service.time, "time",
+                                  return_value=config_service.time.time() + 60):
+                    self.assertEqual(config_service.get_audio_model_status()["status"], "stopped")
+
+    def test_agent_status_files_are_written_atomically(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            with patch.object(config_service.os.path, "expanduser", return_value=temporary):
+                config_service.update_agent_status("idle", message="ok")
+                self.assertEqual(config_service.get_agent_status()["status"], "idle")
+
 
 if __name__ == "__main__":
     unittest.main()

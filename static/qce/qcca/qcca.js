@@ -319,6 +319,8 @@
       not_started: 'Agent 未启动',
       loading: '模型加载中',
       ready: '模型已就绪',
+      standby: '按需加载',
+      disabled: '已关闭',
       failed: '加载失败',
       stopped: 'Agent 已停止',
       unknown: '状态未知'
