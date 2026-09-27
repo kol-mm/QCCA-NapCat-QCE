@@ -34,7 +34,7 @@ VALID_AGENTS = config_service.VALID_AGENTS
 app = FastAPI(
     title="QCCA API",
     description="QCCA 配置管理 API",
-    version="1.2.1",
+    version="1.3.0",
     license_info={"name": "GPL-3.0"},
 )
 _qce_web_port = os.getenv("QCE_SERVER_PORT", "40653")

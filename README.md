@@ -40,7 +40,7 @@ flowchart LR
 | --- | --- |
 | NapCat | v4.18.19，提供 QQ 与 OneBot 接口 |
 | QQ Chat Exporter | v5.5.80，导出并浏览 QQ 聊天记录 |
-| QCCA | v1.2.1，处理 live-capture 消息、调用 Codex / Claude，并通过 QQ 邮箱回复 |
+| QCCA | v1.3.0，处理 live-capture 消息、调用 Codex / Claude，并通过 QQ 邮箱回复 |
 | QCCA API | 基于 FastAPI 的本地管理服务 |
 
 ## 功能
@@ -53,17 +53,17 @@ flowchart LR
 - 通过本地网页管理已有工作区的 Agent 类型、沙箱权限、会话记录和发件 QQ。
 - 首次启动提供配置向导，并集中显示 NapCat、QCE、QCCA、Agent、音频模型和 SMTP 状态。
 
-## 1.2.1 更新
+## 1.3.0 更新
 
-- 新增 Codex / Claude 多 Agent 支持，可通过 QQ 指令或管理页面为会话切换 Agent。
-- 引入 Agent 注册表与独立适配器目录，后续接入其他编码 Agent 时不必修改消息处理主流程。
-- 会话使用全局唯一 UUID，并以独立 JSONL 文件保存人与 Agent 的对话记录。
-- 调用 Agent 时会读取当前会话的共享记忆；切换 Agent 后仍能继续使用同一份 QCCA 会话上下文。
-- 管理页面可查看 Agent 运行状态、工作区、会话、会话 ID 和最近 200 条聊天记录。
-- 管理页面新增会话 Agent 下拉框，同时保持工作目录、会话名称和会话 ID 只读。
-- 优化 `/agent`、`/status`、`/sessions`、`/cancel` 等 QQ 指令与失败状态反馈。
-- 管理页新增首次配置向导：检查运行环境、选择新会话默认 Agent，并可配置当前登录 QQ 的邮箱授权码。
-- 管理页新增统一运行状态总览，服务未启动时显示可直接执行的处理建议。
+- 不同 QQ 用户的消息可同时处理（默认 3 个，`QCCA_MAX_PARALLEL_SENDERS`），同一用户的消息仍按顺序处理；一个耗时较长的 Agent 调用不再阻塞其他用户。
+- 语音识别模型可按需加载并在空闲时释放内存：`QCCA_AUDIO_MODEL=eager`（默认）、`lazy` 或 `off`，`QCCA_AUDIO_IDLE_MINUTES` 设置空闲释放时间（默认 10 分钟）。
+- Codex 输出改为逐行处理，长时间运行不再占用大量内存。
+- 语音消息直接在内存中转换为 16 kHz 音频交给模型，不再在 QQ 媒体目录写入临时 WAV 文件。
+- 启动时的依赖检查更快：只确认 PyTorch 与 FunASR 已安装，不再完整导入。
+- 管理页面的运行状态检查更快；聊天记录只在有新内容时刷新，不再每 5 秒闪烁并重置滚动位置；页面隐藏时暂停轮询。
+- QCE 页面中的会话搜索框在大型会话列表中明显更流畅，并修复了每次打开对话框遗留监听器的问题。
+- 修复多个并发写入配置时可能丢失更新、锁顺序不一致以及 SMTP 配置临时文件冲突等问题。
+- 新增 Windows GitHub Actions 自动测试。
 
 ## 开始使用
 
