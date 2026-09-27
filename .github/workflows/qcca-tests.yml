@@ -1,7 +1,10 @@
 name: QCCA tests
 
 on:
+  # Pull requests are covered by the pull_request trigger; running on every
+  # branch push as well would test each PR commit twice.
   push:
+    branches: [main]
     paths:
       - "qcca/**"
       - ".github/workflows/qcca-tests.yml"
@@ -12,6 +15,11 @@ on:
 
 permissions:
   contents: read
+
+# A newer commit on the same branch or PR supersedes a run still in progress.
+concurrency:
+  group: qcca-tests-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   unittest:
